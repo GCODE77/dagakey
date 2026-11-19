@@ -1,0 +1,18 @@
+﻿# 鍮뚮뱶 寃곌낵臾?/ 濡쒖뺄 ?ㅼ젙
+build/
+.gradle/
+local.properties
+.idea/
+*.iml
+*.apk
+*.hprof
+
+# 湲곗븘 ??遺꾩꽍 ?먮즺 (湲곗븘 ?뚯쑀 肄붾뱶媛 ?ㅼ뼱 ?덉뼱 怨듦컻 湲덉?)
+capture/
+CAPTURE_GUIDE.md
+
+# 媛쒖씤 罹≪쿂쨌濡쒓렇
+/*.png
+/*.jpg
+files.txt
+cand.txt

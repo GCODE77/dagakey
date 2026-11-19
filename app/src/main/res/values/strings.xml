@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">다가키</string>
+    <string name="acc_desc">기아 앱을 대신 조작해 차 문을 자동으로 잠그고 엽니다.</string>
+    <string name="widget_desc">열기·잠금·트렁크를 홈 화면에서 바로</string>
+</resources>
