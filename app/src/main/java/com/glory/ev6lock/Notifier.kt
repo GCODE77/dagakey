@@ -31,6 +31,35 @@ object Notifier {
 
     fun info(ctx: Context, text: String) = nm(ctx).notify(1, base(ctx, text).build())
 
+    /** 새 버전 알림: 누르거나 '업데이트'를 누르면 앱이 열리며 바로 다운로드 시작 */
+    fun updateAvailable(ctx: Context, tag: String) {
+        val open = PendingIntent.getActivity(
+            ctx, 41, Intent(ctx, MainActivity::class.java).putExtra("update", true).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        nm(ctx).notify(
+            5, Notification.Builder(ctx, CH)
+                .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setContentTitle("다가키 새 버전 $tag")
+                .setContentText("눌러서 업데이트 (다운로드 후 바로 설치)")
+                .setContentIntent(open).setAutoCancel(true)
+                .addAction(Notification.Action.Builder(null, "업데이트", open).build())
+                .build()
+        )
+    }
+
+    /** 앱이 화면에 없을 때 설치 확인 화면을 알림으로 이어줌 */
+    fun installConfirm(ctx: Context, confirm: Intent) {
+        val pi = PendingIntent.getActivity(ctx, 42, confirm, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        nm(ctx).notify(
+            6, Notification.Builder(ctx, CH)
+                .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setContentTitle("다가키 업데이트 — 설치 확인")
+                .setContentText("눌러서 설치를 계속하세요")
+                .setContentIntent(pi).setAutoCancel(true).build()
+        )
+    }
+
     fun pendingLock(ctx: Context, min: Int) = nm(ctx).notify(
         1, base(ctx, "차에서 걸어서 떠나면 ${min}분 뒤 자동으로 잠급니다")
             .addAction(Notification.Action.Builder(null, "취소", action(ctx, "CANCEL", 11)).build())

@@ -44,6 +44,22 @@ class Prefs(ctx: Context) {
     var bleRssi: Int
         get() = sp.getInt("bleRssi3", -90)
         set(v) = sp.edit().putInt("bleRssi3", v).apply()
+    // ── 업데이트 (GitHub 릴리스 확인) ──
+    var autoUpdate: Boolean
+        get() = sp.getBoolean("autoUpdate", true)
+        set(v) = sp.edit().putBoolean("autoUpdate", v).apply()
+    var updTag by str("updTag")          // 발견한 최신 버전 태그 (예: v0.1.1)
+    var updUrl by str("updUrl")          // APK 다운로드 주소
+    var updSha by str("updSha")          // APK sha256 (있을 때만)
+    var updNotes by str("updNotes")      // 릴리스 설명
+    var updNotified by str("updNotified")  // 알림을 이미 보낸 버전
+    var updSize: Long
+        get() = sp.getLong("updSize", 0)
+        set(v) = sp.edit().putLong("updSize", v).apply()
+    var lastUpdCheck: Long
+        get() = sp.getLong("lastUpdCheck", 0)
+        set(v) = sp.edit().putLong("lastUpdCheck", v).apply()
+
     // ── 배터리 절약 ──
     /** 집 와이파이 이름 (연결돼 있으면 차 감시 쉼) */
     var homeSsid by str("homeSsid")

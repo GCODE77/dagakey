@@ -16,3 +16,8 @@ CAPTURE_GUIDE.md
 /*.jpg
 files.txt
 cand.txt
+
+# ?쒕챸 ??(?덈? 怨듦컻 湲덉?)
+*.keystore
+*.jks
+_signing-backup/

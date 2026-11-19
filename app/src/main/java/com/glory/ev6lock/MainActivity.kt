@@ -35,7 +35,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val Bg = Color(0xFF0B111B)
 private val Card1 = Color(0xFF161F2C)
@@ -67,11 +69,23 @@ class MainActivity : ComponentActivity() {
         val p = Prefs(this)
         p.autoLock = true; p.approachUnlock = true; p.autoUnlock = true; p.useAppAutomation = true
         Notifier.persistent(this)
+        Updater.schedule(this)                                  // 12시간마다 새 버전 확인
+        wantUpdate = intent?.getBooleanExtra("update", false) == true   // 알림을 눌러 들어온 경우
         setContent {
             MaterialTheme(colorScheme = EvScheme) {
                 Surface(Modifier.fillMaxSize(), color = Bg) { Screen(p) }
             }
         }
+    }
+
+    /** 새 버전 알림을 눌러 들어오면 true → 바로 다운로드 시작 */
+    private var wantUpdate by mutableStateOf(false)
+
+    override fun onResume() { super.onResume(); Updater.appForeground = true }
+    override fun onPause() { Updater.appForeground = false; super.onPause() }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent); setIntent(intent)
+        if (intent.getBooleanExtra("update", false)) wantUpdate = true
     }
 
     /** 배터리 '제한 없음' 화면으로 이동 (삼성은 요청창이 막히는 경우가 있어 단계별로 시도) */
@@ -124,6 +138,27 @@ class MainActivity : ComponentActivity() {
         val sig = remember(tick) { p.bleAddress.isNotBlank() }   // 차 신호 등록 여부 (처음 설치 시 꼭 필요)
         val allReady = acc && bat && !demo && sig
 
+        // ── 업데이트 ──
+        val upd by Updater.state.collectAsState()
+        val hasUpd = remember(tick, upd) { Updater.hasUpdate(this@MainActivity) }
+        // 앱을 열 때 1시간 넘게 확인 안 했으면 확인 (설정에서 끈 경우 제외)
+        LaunchedEffect(Unit) {
+            if (p.autoUpdate && System.currentTimeMillis() - p.lastUpdCheck > 3_600_000) {
+                withContext(Dispatchers.IO) { Updater.fetch(this@MainActivity) }; tick++
+            }
+        }
+        // 설치 허용을 켜고 돌아오면 다시 시도할 수 있게
+        LaunchedEffect(tick) { if (Updater.state.value is Updater.St.NeedPermission && Updater.canInstall(this@MainActivity)) Updater.state.value = Updater.St.Idle }
+        // 알림을 눌러 들어온 경우: 바로 다운로드 시작
+        LaunchedEffect(wantUpdate) {
+            if (wantUpdate) {
+                wantUpdate = false
+                if (!Updater.hasUpdate(this@MainActivity)) withContext(Dispatchers.IO) { Updater.fetch(this@MainActivity) }
+                tick++
+                if (Updater.hasUpdate(this@MainActivity)) Updater.start(this@MainActivity)
+            }
+        }
+
         fun run(label: String, f: suspend (KiaApi) -> String) = scope.launch {
             busy = true; status = "$label 요청 중…"
             status = try { f(KiaApi.get(p)) } catch (e: Exception) { "오류: ${e.message}" }
@@ -141,6 +176,37 @@ class MainActivity : ComponentActivity() {
                 Text("EV6", fontSize = 14.sp, color = Blue, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.weight(1f))
                 IconPill("⚙") { showSettings = true }
+            }
+
+            // ── 새 버전 배너 ──
+            if (hasUpd) Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Blue.copy(alpha = 0.16f))) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("새 버전 ${p.updTag}", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Txt)
+                            Text("현재 v${Updater.installedVersion(this@MainActivity)}", fontSize = 12.sp, color = Sub)
+                        }
+                        when (val u = upd) {
+                            is Updater.St.Idle, is Updater.St.Failed ->
+                                Button({ Updater.start(this@MainActivity) }, shape = RoundedCornerShape(14.dp)) {
+                                    Text(if (u is Updater.St.Failed) "다시 시도" else "업데이트", fontWeight = FontWeight.Bold)
+                                }
+                            is Updater.St.NeedPermission ->
+                                Button({ Updater.openInstallPermission(this@MainActivity) }, shape = RoundedCornerShape(14.dp)) { Text("허용하러 가기") }
+                            else -> {}
+                        }
+                    }
+                    when (val u = upd) {
+                        is Updater.St.Downloading -> {
+                            LinearProgressIndicator({ u.pct / 100f }, Modifier.fillMaxWidth())
+                            Text("내려받는 중 ${u.pct}%", fontSize = 13.sp, color = Txt)
+                        }
+                        is Updater.St.Installing -> Text("설치 화면이 뜨면 '설치(업데이트)'를 눌러주세요", fontSize = 13.sp, color = Txt)
+                        is Updater.St.NeedPermission -> Text("먼저 '이 앱에서 설치 허용'을 켜야 해요. 켠 뒤 돌아오면 다시 누르세요", fontSize = 13.sp, color = Txt)
+                        is Updater.St.Failed -> Text(u.msg, fontSize = 13.sp, color = Red)
+                        else -> Text("누르면 내려받아 바로 설치해요", fontSize = 13.sp, color = Sub)
+                    }
+                }
             }
 
             // ── 히어로: 지금 차 상태를 한눈에 ──
@@ -336,7 +402,34 @@ class MainActivity : ComponentActivity() {
     private fun Advanced(p: Prefs) {
         var showBt by remember { mutableStateOf(false) }
         var showBle by remember { mutableStateOf(false) }
+        val sc = rememberCoroutineScope()
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // ── 업데이트 ──
+            Text("업데이트", fontSize = 14.sp, color = Sub)
+            Text("현재 버전 v${Updater.installedVersion(this@MainActivity)}", fontSize = 14.sp, color = Txt)
+            var au by remember { mutableStateOf(p.autoUpdate) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(au, { au = it; p.autoUpdate = it; Updater.schedule(this@MainActivity) })
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text("새 버전 자동 확인 (12시간마다)", fontSize = 14.sp, color = Txt)
+                    Text("인터넷은 GitHub에서 새 버전을 확인·다운로드할 때만 써요", fontSize = 12.sp, color = Sub)
+                }
+            }
+            var chk by remember { mutableStateOf("") }
+            OutlinedButton({
+                chk = "확인 중…"
+                sc.launch {
+                    val ok = withContext(Dispatchers.IO) { Updater.fetch(this@MainActivity) }
+                    chk = when {
+                        !ok -> "확인 실패 — 인터넷 연결을 확인하세요"
+                        Updater.hasUpdate(this@MainActivity) -> "새 버전 ${p.updTag} 이 있어요 — 화면 위쪽 '업데이트'를 누르세요"
+                        else -> "최신 버전이에요"
+                    }
+                }
+            }, Modifier.fillMaxWidth()) { Text("지금 새 버전 확인") }
+            if (chk.isNotEmpty()) Text(chk, fontSize = 13.sp, color = Txt)
+
             Button({ KiaAutoService.instance?.selfTest() ?: p.log("자가 진단: 접근성이 꺼져 있음") },
                 Modifier.fillMaxWidth()) { Text("자가 진단 (기록에 결과 표시)") }
             OutlinedButton({ KiaAutoService.instance?.testLeaveWatch() ?: p.log("접근성이 꺼져 있음") },
