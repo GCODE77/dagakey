@@ -80,6 +80,7 @@ class MainActivity : ComponentActivity() {
         Notifier.persistent(this)
         Updater.schedule(this)                                  // 12시간마다 새 버전 확인
         wantUpdate = intent?.getBooleanExtra("update", false) == true   // 알림을 눌러 들어온 경우
+        handleLink(intent)                                              // 가족이 보낸 차 신호 링크
         setContent {
             MaterialTheme(colorScheme = EvScheme) {
                 Surface(Modifier.fillMaxSize(), color = Bg) { Screen(p) }
@@ -95,9 +96,44 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)
         if (intent.getBooleanExtra("update", false)) wantUpdate = true
+        handleLink(intent)
     }
 
     /** 배터리 '제한 없음' 화면으로 이동 (삼성은 요청창이 막히는 경우가 있어 단계별로 시도) */
+    // ── 차 신호 가족 공유 ──
+    /** 공유 문구: 사람이 읽을 설명 + 누르면 바로 등록되는 링크 + 붙여넣기용 코드 */
+    private fun shareCar(p: Prefs) {
+        val link = "dagakey://car?mac=${p.bleAddress}&ref=${p.bleRef1m}" +
+            (if (p.carBtName.isNotBlank()) "&audio=" + Uri.encode(p.carBtName) else "")
+        val text = "다가키 차 신호 공유 🚗\n" +
+            "1) 다가키 설치: https://github.com/GCODE77/dagakey/releases/latest\n" +
+            "2) 이 링크를 누르거나, 이 글을 복사해 다가키 › 설정 › 차 신호 등록 › '받은 정보 붙여넣기'\n" +
+            "$link\n다가키코드: ${p.bleAddress}|${p.bleRef1m}|${p.carBtName}"
+        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), "차 신호 공유"))
+    }
+
+    /** 받은 글/링크에서 차 신호 읽어 등록. 성공하면 true */
+    fun importCar(p: Prefs, text: String, from: String): Boolean {
+        val mac = Regex("([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}").find(text)?.value?.uppercase() ?: return false
+        p.bleAddress = mac
+        val ref = Regex("ref=(-\\d{2})").find(text)?.groupValues?.get(1)
+            ?: Regex("다가키코드:\\s*[0-9A-Fa-f:]{17}\\|(-\\d{2})").find(text)?.groupValues?.get(1)
+        ref?.toIntOrNull()?.let { p.bleRef1m = it.coerceIn(-80, -40); p.calSamples = "${p.bleRef1m}" }
+        val audio = Regex("audio=([^&\\s]+)").find(text)?.groupValues?.get(1)?.let { Uri.decode(it) }
+            ?: Regex("다가키코드:\\s*[0-9A-Fa-f:]{17}\\|-?\\d*\\|(.+)").find(text)?.groupValues?.get(1)?.trim()
+        if (!audio.isNullOrBlank()) { p.carBtName = audio; p.carBtAddress = "" }
+        p.log("차 신호 등록 ($from): $mac" + (ref?.let { " · 기준 $it" } ?: ""))
+        BleNear.start(this, quiet = true)
+        Toast.makeText(this, "✓ 차 신호를 등록했어요 ($mac)", Toast.LENGTH_LONG).show()
+        return true
+    }
+
+    /** 공유 링크(dagakey://car?...)로 열렸으면 바로 등록 */
+    private fun handleLink(i: Intent?) {
+        val d = i?.data ?: return
+        if (d.scheme == "dagakey" && d.host == "car") importCar(Prefs(this), d.toString(), "공유 링크")
+    }
+
     /** 잠금화면 설정 (여기 '잠금 해제 유지 → 몸에 지니고 있을 때') */
     private fun openLockScreenSettings() {
         Toast.makeText(this, "'잠금 해제 유지' → '몸에 지니고 있을 때'를 켜세요", Toast.LENGTH_LONG).show()
@@ -372,6 +408,14 @@ class MainActivity : ComponentActivity() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("활동 기록", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Txt)
                     Spacer(Modifier.weight(1f))
+                    TextButton({
+                        // 문제 분석용: 상세 기록 파일 뒷부분을 공유 (카톡·메일 등)
+                        val f = java.io.File(filesDir, "app.log")
+                        val body = if (f.exists()) f.readText().takeLast(60_000) else p.lastLog
+                        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                            .putExtra(Intent.EXTRA_SUBJECT, "다가키 기록 v${Updater.installedVersion(this@MainActivity)}")
+                            .putExtra(Intent.EXTRA_TEXT, body), "기록 보내기"))
+                    }) { Text("공유", color = Blue) }
                     TextButton({ p.lastLog = ""; tick++; showLog = false }) { Text("지우기", color = Red) }
                 }
                 Column(Modifier.fillMaxHeight(0.85f).verticalScroll(rememberScrollState())) {
@@ -666,6 +710,32 @@ class MainActivity : ComponentActivity() {
                     }
                 }, Modifier.fillMaxWidth()) { Text("차 옆에서 신호 찾기 (10초)") }
                 Text("선택된 신호: ${bleSel.ifBlank { "없음" }}", fontSize = 13.sp, color = Txt)
+                // 주소를 이미 알면 직접 입력 (재설치·가족 폰에서 차에 안 가도 등록)
+                var manualMac by remember { mutableStateOf("") }
+                val macOk = Regex("^([0-9A-F]{2}:){5}[0-9A-F]{2}$").matches(manualMac)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(manualMac, { manualMac = it.uppercase().filter { c -> c.isLetterOrDigit() || c == ':' }.take(17) },
+                        label = { Text("신호 주소 직접 입력 (예: AA:BB:CC:DD:EE:FF)") }, singleLine = true,
+                        isError = manualMac.isNotEmpty() && !macOk, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(8.dp))
+                    Button({
+                        p.bleAddress = manualMac; bleSel = manualMac; p.log("차 신호 직접 등록: $manualMac"); manualMac = ""
+                        Toast.makeText(ctx, "✓ 차 신호를 등록했어요", Toast.LENGTH_SHORT).show()
+                        BleNear.start(ctx, quiet = true)
+                    }, enabled = macOk) { Text("저장") }
+                }
+                // 가족과 공유: 보내기 / 받은 정보 붙여넣기
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton({ shareCar(p) }, Modifier.weight(1f), enabled = bleSel.isNotBlank()) { Text("가족에게 공유") }
+                    Button({
+                        val clip = (getSystemService(android.content.ClipboardManager::class.java))
+                            ?.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString() ?: ""
+                        if (importCar(p, clip, "붙여넣기")) bleSel = p.bleAddress
+                        else Toast.makeText(ctx, "복사한 글에서 차 신호를 못 찾았어요. 받은 메시지를 먼저 복사하세요", Toast.LENGTH_LONG).show()
+                    }, Modifier.weight(1f)) { Text("받은 정보 붙여넣기") }
+                }
+                Text("가족 폰: 받은 메시지의 링크를 누르거나, 메시지를 복사한 뒤 '받은 정보 붙여넣기' → 차에 안 가도 바로 등록돼요",
+                    fontSize = 12.sp, color = Sub)
                 if (bleList.isNotEmpty()) Text("맨 위(가장 센 신호)를 누르세요", fontSize = 12.sp, color = Sub)
                 bleList.forEach { line ->
                     val mac = line.substringBefore(" ")
