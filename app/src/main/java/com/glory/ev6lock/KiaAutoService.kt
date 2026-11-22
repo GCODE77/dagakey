@@ -359,6 +359,12 @@ class KiaAutoService : AccessibilityService() {
             return
         }
 
+        // 자동 잠금(디지털키 전용 설정): 디지털키가 붙을 때만 잠금
+        if (wantLock && dkOnly && !dkConnected) {
+            tryConnectDk(root)
+            if (elapsed >= 40_000) { p.log("디지털키 연결 안 됨 — 원격 잠금 꺼짐 설정이라 잠그지 않음"); Notifier.info(applicationContext, "디지털키가 연결 안 돼 잠그지 못했어요"); done() }
+            return
+        }
         val node = if (wantLock) findExact(root, setOf("잠금"), visibleOnly = true)
                    else findExact(root, setOf("잠금해제"), visibleOnly = true)
         if (node == null) {
@@ -516,6 +522,7 @@ class KiaAutoService : AccessibilityService() {
                             p.log("${walked.toInt()}걸음 걸어서 멀어짐 → 바로 잠금")
                             Jobs.cancelLock(applicationContext)          // 예비 예약 취소
                             p.lastLeftAt = System.currentTimeMillis()
+                            dkOnly = !p.leaveRemote
                             request("lock", pin)
                             h.postDelayed({ BleNear.start(applicationContext) }, 3000)
                         } else h.postDelayed(self, 4000)

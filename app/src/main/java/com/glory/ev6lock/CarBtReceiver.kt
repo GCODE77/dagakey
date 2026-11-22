@@ -57,7 +57,8 @@ class CarBtReceiver : BroadcastReceiver() {
      */
     private fun onApproachDevice(ctx: Context, p: Prefs, name: String, connected: Boolean) {
         if (connected) {
-            p.log("차 디지털키 모듈 연결 ($name)")
+            val age = System.currentTimeMillis() - p.lastRssiAt
+            p.log("차 디지털키 모듈 연결 ($name)" + if (age < 15_000) " · ${BleNear.dist(p, p.lastRssi)}" else "")
             return
         }
         // ★ 실측: 주행 중에도 이 모듈이 끊겼다 붙었다 함 → 차 안(오디오 연결)이면 무시
@@ -83,6 +84,7 @@ class CarBtReceiver : BroadcastReceiver() {
         if (connected) {
             p.log("차 오디오 연결 ($name) = 탑승/주행 → 자동 잠금·열기 멈춤")
             p.inCar = true
+            BleNear.calibrate(p, "탑승")   // 방금 차 문 앞에서 잡힌 세기로 거리 보정
             Jobs.cancelLock(ctx)
             KiaAutoService.instance?.stopLeaveWatch()
             BleNear.stop(ctx)

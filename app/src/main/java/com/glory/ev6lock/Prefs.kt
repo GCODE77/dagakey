@@ -49,6 +49,23 @@ class Prefs(ctx: Context) {
     var bleRef1m: Int
         get() = sp.getInt("bleRef", -59)
         set(v) = sp.edit().putInt("bleRef", v).apply()
+    /** 가장 최근에 잡힌 차 신호 세기와 시각 (실시간 거리 표시·자동 보정용) */
+    var lastRssi: Int
+        get() = sp.getInt("lastRssi", -127)
+        set(v) = sp.edit().putInt("lastRssi", v).apply()
+    var lastRssiAt: Long
+        get() = sp.getLong("lastRssiAt", 0)
+        set(v) = sp.edit().putLong("lastRssiAt", v).apply()
+    /** 최근 20초 중 가장 센 신호 (탑승 직전 = 차 문 앞 세기) */
+    var nearMax: Int
+        get() = sp.getInt("nearMax", -127)
+        set(v) = sp.edit().putInt("nearMax", v).apply()
+    var nearMaxAt: Long
+        get() = sp.getLong("nearMaxAt", 0)
+        set(v) = sp.edit().putLong("nearMaxAt", v).apply()
+    /** 거리 보정 기록: '1m 환산 세기' 목록 (최근 7개, 쉼표) */
+    var calSamples by str("calSamples")
+
     /** 이 세기 이상이면 '다가옴' (unlockMeters를 세기로 환산) */
     val bleRssi: Int get() = BleNear.rssiAt(unlockMeters.toDouble(), bleRef1m)
     // ── 업데이트 (GitHub 릴리스 확인) ──
@@ -155,6 +172,10 @@ class Prefs(ctx: Context) {
     var approachRemote: Boolean
         get() = sp.getBoolean("approachRemote", false)
         set(v) = sp.edit().putBoolean("approachRemote", v).apply()
+    /** 자동 잠금 때 디지털키가 안 붙어 있으면 원격으로 잠글지 (기본 켜짐: 멀어지면 디지털키가 끊기므로) */
+    var leaveRemote: Boolean
+        get() = sp.getBoolean("leaveRemote", true)
+        set(v) = sp.edit().putBoolean("leaveRemote", v).apply()
     /** 차 감시(BLE 검색)가 켜진 시각 — 꺼져 있던 동안을 '신호 없음(멀리 감)'으로 오인하지 않기 위해 */
     var scanOn: Boolean
         get() = sp.getBoolean("scanOn", false)

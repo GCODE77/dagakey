@@ -29,6 +29,37 @@ object BleNear {
         return "세기 $rssi, 약 ${if (m < 10) "%.1f".format(m) else m.toInt().toString()}m"
     }
 
+    /** 차 신호를 받을 때마다 호출: 최근 세기·20초 최대값 기록 */
+    fun remember(p: Prefs, rssi: Int) {
+        val now = System.currentTimeMillis()
+        if (now - p.lastRssiAt > 1500 || rssi != p.lastRssi) { p.lastRssi = rssi; p.lastRssiAt = now }
+        if (now - p.nearMaxAt > 20_000 || rssi >= p.nearMax) { p.nearMax = rssi; p.nearMaxAt = now }
+    }
+
+    /**
+     * 실제 사건으로 거리 자동 보정.
+     *  - 탑승(차 오디오 연결): 직전 20초 최대 세기 = 차 문 앞 ≈ 1m
+     *  - 차 옆에서 직접 열기/잠금 누름: 최근 15초 세기 ≈ 2m
+     * 각 기록을 '1m 환산 세기'로 바꿔 최근 7개의 중간값을 기준으로 씀 (튀는 값 무시).
+     */
+    fun calibrate(p: Prefs, why: String) {
+        val now = System.currentTimeMillis()
+        val (rssi, m) = when (why) {
+            "탑승" -> if (now - p.nearMaxAt < 25_000) p.nearMax to 1.0 else return
+            else -> if (now - p.lastRssiAt < 15_000) p.lastRssi to 2.0 else return
+        }
+        // 멀리서 누른 것(현재 기준으로 5m 넘음)은 '차 옆'이 아니므로 보정에 안 씀
+        if (why != "탑승" && meters(rssi, p.bleRef1m) > 5.0) return
+        if (rssi < -95 || rssi > -30) return
+        val ref = (rssi + 10 * N * Math.log10(m)).toInt()
+        val list = (p.calSamples.split(",").mapNotNull { it.toIntOrNull() } + ref).takeLast(7)
+        p.calSamples = list.joinToString(",")
+        val med = list.sorted()[list.size / 2].coerceIn(-80, -40)
+        val old = p.bleRef1m
+        p.bleRef1m = med
+        p.log("📏 거리 기록 ($why, 세기 $rssi ≈ ${m.toInt()}m) → 1m 기준 $old → $med (기록 ${list.size}개)")
+    }
+
     private fun scanner(ctx: Context) = ctx.getSystemService(BluetoothManager::class.java).adapter?.bluetoothLeScanner
 
     private fun pi(ctx: Context) = PendingIntent.getBroadcast(
@@ -122,6 +153,7 @@ class BleNearReceiver : BroadcastReceiver() {
         val p = Prefs(ctx)
         val best = results.maxOfOrNull { it.rssi } ?: return
         val now = System.currentTimeMillis()
+        BleNear.remember(p, best)
         if (!p.masterOn || !p.approachUnlock) { BleNear.stop(ctx); return }
         // '멀리 갔었음' 판단: 감시가 켜진 상태에서 60초 넘게 신호가 안 들렸거나, 아주 약하면(약 25m+)
         // ★ 실측 버그: 잠근 직후 감시를 새로 켜면 '마지막으로 본 시각'이 오래전이라 바로 '멀어짐' → 2초 뒤 열림.

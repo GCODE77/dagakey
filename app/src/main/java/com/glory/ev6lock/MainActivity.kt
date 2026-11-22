@@ -175,7 +175,7 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.width(8.dp))
                 Text("EV6", fontSize = 14.sp, color = Blue, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.weight(1f))
-                IconPill("⚙") { showSettings = true }
+                IconPill("⚙") { settingsPage = null; showSettings = true }
             }
 
             // ── 새 버전 배너 ──
@@ -216,7 +216,7 @@ class MainActivity : ComponentActivity() {
             var approachOn by remember { mutableStateOf(p.approachUnlock) }
             val braked = remember(tick) { p.braked }
             fun applyAuto() {
-                Notifier.persistent(this@MainActivity)
+                Notifier.persistent(this@MainActivity); DagaWidget.refresh(this@MainActivity, null)
                 if (master && approachOn) BleNear.start(this@MainActivity, quiet = true) else BleNear.stop(this@MainActivity)
                 if (!master || !autoLockOn) { KiaAutoService.instance?.stopLeaveWatch(); Jobs.cancelLock(this@MainActivity) }
             }
@@ -254,11 +254,11 @@ class MainActivity : ComponentActivity() {
                     }
                     // 따로 켜고 끄기 (눌러서 전환)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Chip("다가가면 열기", master && approachOn && allReady && !inCar, enabled = master) {
+                        Chip("다가가면 열기", master && approachOn && allReady && !inCar, enabled = master, icon = R.drawable.ic_btn_unlock) {
                             approachOn = !approachOn; p.approachUnlock = approachOn
                             p.log("다가가면 열기 ${if (approachOn) "켬" else "끔"}"); applyAuto()
                         }
-                        Chip("멀어지면 잠금", master && autoLockOn && allReady && !inCar, enabled = master) {
+                        Chip("멀어지면 잠금", master && autoLockOn && allReady && !inCar, enabled = master, icon = R.drawable.ic_btn_lock) {
                             autoLockOn = !autoLockOn; p.autoLock = autoLockOn
                             p.log("멀어지면 잠금 ${if (autoLockOn) "켬" else "끔"}"); applyAuto()
                         }
@@ -315,7 +315,7 @@ class MainActivity : ComponentActivity() {
                         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     }
                     if (!bat) CheckRow("배터리 제한 없음", false, "눌러서 해제") { openBattery() }
-                    if (!sig) CheckRow("차 신호 등록 (차 옆에서)", false, "눌러서 등록") { showSettings = true }
+                    if (!sig) CheckRow("차 신호 등록 (차 옆에서)", false, "눌러서 등록") { settingsPage = "차 신호 등록"; showSettings = true }
                     if (demo) CheckRow("실제 차량 제어", false, "테스트 모드 · 눌러서 끄기") { demo = false; p.demoMode = false }
                 }
             }
@@ -345,14 +345,15 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(3000); tick++ } }
 
         // ── 기록 시트 ──
-        if (showLog) ModalBottomSheet(onDismissRequest = { showLog = false }, containerColor = Card1) {
-            Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+        if (showLog) ModalBottomSheet(onDismissRequest = { showLog = false }, containerColor = Card1,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+            Column(Modifier.padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("활동 기록", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Txt)
                     Spacer(Modifier.weight(1f))
                     TextButton({ p.lastLog = ""; tick++; showLog = false }) { Text("지우기", color = Red) }
                 }
-                Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
+                Column(Modifier.fillMaxHeight(0.85f).verticalScroll(rememberScrollState())) {
                     p.lastLog.lineSequence().filter { it.isNotBlank() }.forEach {
                         Text(it, fontSize = 13.sp, color = Txt, modifier = Modifier.padding(vertical = 3.dp))
                     }
@@ -361,27 +362,40 @@ class MainActivity : ComponentActivity() {
         }
 
         // ── 설정 시트 ──
-        if (showSettings) ModalBottomSheet(onDismissRequest = { showSettings = false }, containerColor = Card1) {
-            Column(
-                Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp).heightIn(max = 620.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text("설정", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Txt)
-                Advanced(p)
+        // ── 설정: 전체 화면 (목록 → 항목 화면) ──
+        if (showSettings) {
+            val back = { if (settingsPage != null) settingsPage = null else { showSettings = false; tick++ } }
+            androidx.activity.compose.BackHandler { back() }
+            Surface(Modifier.fillMaxSize(), color = Bg) {
+                Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                    // 상단 바: ← + 제목
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(48.dp).clip(CircleShape).clickable { back() }, contentAlignment = Alignment.Center) {
+                            Text("←", fontSize = 24.sp, color = Txt)
+                        }
+                        Text(if (settingsPage == null) "설정" else "설정 › ${settingsPage}", fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold, color = if (settingsPage == null) Txt else Sub)
+                    }
+                    Column(
+                        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) { Advanced(p) }
+                }
             }
         }
     }
 
     @Composable
-    private fun Chip(label: String, on: Boolean, enabled: Boolean = true, onClick: (() -> Unit)? = null) {
+    private fun Chip(label: String, on: Boolean, enabled: Boolean = true, icon: Int = 0, onClick: (() -> Unit)? = null) {
         Row(
             Modifier.clip(RoundedCornerShape(50)).background(if (on) Green.copy(alpha = 0.14f) else Card2)
                 .then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(Modifier.size(7.dp).clip(CircleShape).background(if (on) Green else Sub))
+            if (icon != 0) Image(painterResource(icon), null, Modifier.size(18.dp),
+                alpha = if (on) 1f else 0.4f)
+            else Box(Modifier.size(7.dp).clip(CircleShape).background(if (on) Green else Sub))
             Spacer(Modifier.width(6.dp))
             Text(if (onClick != null) "$label ${if (on) "ON" else "OFF"}" else label,
                 fontSize = 12.sp, color = if (on) Txt else Sub, fontWeight = FontWeight.SemiBold)
@@ -427,173 +441,297 @@ class MainActivity : ComponentActivity() {
         ) { Text(t, fontSize = 18.sp, color = Txt) }
     }
 
+
+    // 설정 화면: 목록(한 화면) → 항목을 누르면 그 항목만 전체 화면으로
+    private var settingsPage by mutableStateOf<String?>(null)
+
+    @Composable
+    private fun Section(title: String, sub: String, open0: Boolean = false, icon: Int = 0, iconBg: Color = Card1,
+                        emoji: String = "", content: @Composable ColumnScope.() -> Unit) {
+        val cur = settingsPage
+        if (cur == title) {   // 상세 화면
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (icon != 0) Box(Modifier.size(48.dp).clip(CircleShape).background(iconBg), contentAlignment = Alignment.Center) {
+                        Image(painterResource(icon), null, Modifier.size(28.dp))
+                    } else Text(emoji, fontSize = 30.sp)
+                    Spacer(Modifier.width(14.dp))
+                    Text(title, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Txt)
+                }
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Card2).padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp), content = content)
+            }
+            return
+        }
+        if (cur != null) return
+        // 목록 줄
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Card2)) {
+            Row(Modifier.fillMaxWidth().clickable { settingsPage = title }.padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                if (icon == 0 && emoji.isNotEmpty()) {
+                    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Text(emoji, fontSize = 24.sp) }
+                    Spacer(Modifier.width(12.dp))
+                }
+                // 열기·잠금은 앱 버튼과 같은 그림(열린 자물쇠 / 닫힌 자물쇠) + 다른 바탕색으로 한눈에 구분
+                if (icon != 0) {
+                    Box(Modifier.size(40.dp).clip(CircleShape).background(iconBg), contentAlignment = Alignment.Center) {
+                        Image(painterResource(icon), null, Modifier.size(24.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Txt)
+                    Text(sub, fontSize = 12.sp, color = Sub, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Text("›", fontSize = 26.sp, color = Sub)
+            }
+        }
+    }
+
+    /**
+     * 숫자 설정 공통 방식 (거리·걸음·시간 모두 똑같이):
+     *  − / + 로 1씩 · 가운데 숫자를 누르면 '자주 쓰는 값' 목록 + 직접 입력 → 바로 저장 + '✓ 저장됨'
+     */
+    @Composable
+    private fun Stepper(label: String, value: Int, unit: String, min: Int, max: Int, presets: List<Int>, onSave: (Int) -> Unit) {
+        var saved by remember { mutableStateOf(value) }   // 저장된 값
+        var v by remember { mutableStateOf(value) }       // 고르는 중인 값 (저장 전)
+        var savedAt by remember { mutableStateOf(0L) }
+        var pick by remember { mutableStateOf(false) }
+        LaunchedEffect(savedAt) { if (savedAt > 0) { kotlinx.coroutines.delay(2500); savedAt = 0 } }
+        fun set(n: Int) { v = n.coerceIn(min, max) }      // 값만 바꿈 — '저장'을 눌러야 적용
+        fun save() { onSave(v); saved = v; savedAt = System.currentTimeMillis() }
+        val dirty = v != saved
+        Column {
+            Text(label, fontSize = 14.sp, color = Txt)
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                FilledTonalButton({ set(v - 1) }, enabled = v > min, shape = CircleShape,
+                    contentPadding = PaddingValues(0.dp), modifier = Modifier.size(48.dp)) { Text("−", fontSize = 22.sp) }
+                // 숫자 칸: 누르면 목록/직접 입력
+                Row(Modifier.padding(horizontal = 8.dp).width(112.dp).height(48.dp).clip(RoundedCornerShape(12.dp))
+                    .background(Card1).clickable { pick = true },
+                    horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    Text("$v$unit", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Txt)
+                    Text(" ▾", fontSize = 13.sp, color = Sub)
+                }
+                FilledTonalButton({ set(v + 1) }, enabled = v < max, shape = CircleShape,
+                    contentPadding = PaddingValues(0.dp), modifier = Modifier.size(48.dp)) { Text("+", fontSize = 22.sp) }
+                Spacer(Modifier.width(10.dp))
+                if (dirty) Button({ save() }, contentPadding = PaddingValues(horizontal = 14.dp)) { Text("저장") }
+                else if (savedAt > 0) Text("✓ 저장됨", fontSize = 13.sp, color = Green, fontWeight = FontWeight.SemiBold)
+            }
+            if (dirty) Text("아직 저장 안 됨 (지금 적용값: $saved$unit)", fontSize = 12.sp, color = Red,
+                modifier = Modifier.padding(top = 4.dp))
+        }
+        if (pick) {
+            var typed by remember { mutableStateOf(v.toString()) }
+            val tv = typed.toIntOrNull()
+            val ok = tv != null && tv in min..max
+            AlertDialog(
+                onDismissRequest = { pick = false },
+                containerColor = Card1,
+                title = { Text(label, fontSize = 17.sp, color = Txt) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("자주 쓰는 값", fontSize = 13.sp, color = Sub)
+                        // 목록: 3개씩 줄
+                        presets.chunked(3).forEach { row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                row.forEach { n ->
+                                    val sel = n == v
+                                    Box(Modifier.weight(1f).height(46.dp).clip(RoundedCornerShape(12.dp))
+                                        .background(if (sel) Blue else Card2).clickable { set(n); typed = n.toString() },
+                                        contentAlignment = Alignment.Center) {
+                                        Text("$n$unit", fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                                            color = if (sel) Color.White else Txt)
+                                    }
+                                }
+                                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                            }
+                        }
+                        Text("직접 입력 ($min~$max)", fontSize = 13.sp, color = Sub)
+                        OutlinedTextField(typed, { typed = it.filter(Char::isDigit).take(3) },
+                            singleLine = true, suffix = { Text(unit) }, isError = typed.isNotEmpty() && !ok,
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth())
+                    }
+                },
+                confirmButton = { Button({ tv?.let { set(it); save() }; pick = false }, enabled = ok) { Text("저장") } },
+                dismissButton = { TextButton({ pick = false }) { Text("취소") } }
+            )
+        }
+    }
+
     @Composable
     private fun Advanced(p: Prefs) {
-        var showBt by remember { mutableStateOf(false) }
-        var showBle by remember { mutableStateOf(false) }
         val sc = rememberCoroutineScope()
+        val ctx = this@MainActivity
+        // 실시간 차 신호 (2초마다 갱신)
+        var live by remember { mutableStateOf(0) }
+        LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(2000); live++ } }
+
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // ── 업데이트 ──
-            Text("업데이트", fontSize = 14.sp, color = Sub)
-            Text("현재 버전 v${Updater.installedVersion(this@MainActivity)}", fontSize = 14.sp, color = Txt)
-            var au by remember { mutableStateOf(p.autoUpdate) }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(au, { au = it; p.autoUpdate = it; Updater.schedule(this@MainActivity) })
-                Spacer(Modifier.width(10.dp))
-                Column {
-                    Text("새 버전 자동 확인 (12시간마다)", fontSize = 14.sp, color = Txt)
-                    Text("인터넷은 GitHub에서 새 버전을 확인·다운로드할 때만 써요", fontSize = 12.sp, color = Sub)
-                }
-            }
-            var chk by remember { mutableStateOf("") }
-            OutlinedButton({
-                chk = "확인 중…"
-                sc.launch {
-                    val ok = withContext(Dispatchers.IO) { Updater.fetch(this@MainActivity) }
-                    chk = when {
-                        !ok -> "확인 실패 — 인터넷 연결을 확인하세요"
-                        Updater.hasUpdate(this@MainActivity) -> "새 버전 ${p.updTag} 이 있어요 — 화면 위쪽 '업데이트'를 누르세요"
-                        else -> "최신 버전이에요"
+            // ── 1. 다가가면 열기 ──
+            var metersNow by remember { mutableStateOf(p.unlockMeters) }
+            var stepsNow by remember { mutableStateOf(p.stepThreshold) }
+            Section("다가가면 열기", "약 ${metersNow}m 안으로 걸어오면 디지털키로 열기", open0 = true,
+                icon = R.drawable.ic_btn_unlock, iconBg = Blue.copy(alpha = 0.22f)) {
+                val (nowTxt, nowColor) = remember(live) {
+                    val age = (System.currentTimeMillis() - p.lastRssiAt) / 1000
+                    when {
+                        p.lastRssiAt == 0L || age > 60 -> "지금 차 신호: 안 잡힘 (멀거나 감시 쉼)" to Sub
+                        else -> "지금 차 신호: ${BleNear.dist(p, p.lastRssi)} · ${age}초 전" to
+                            (if (p.lastRssi >= p.bleRssi) Green else Txt)
                     }
                 }
-            }, Modifier.fillMaxWidth()) { Text("지금 새 버전 확인") }
-            if (chk.isNotEmpty()) Text(chk, fontSize = 13.sp, color = Txt)
-
-            Button({ KiaAutoService.instance?.selfTest() ?: p.log("자가 진단: 접근성이 꺼져 있음") },
-                Modifier.fillMaxWidth()) { Text("자가 진단 (기록에 결과 표시)") }
-            OutlinedButton({ KiaAutoService.instance?.testLeaveWatch() ?: p.log("접근성이 꺼져 있음") },
-                Modifier.fillMaxWidth()) { Text("멀어짐 잠금 테스트 (실제로 잠금 요청됨)") }
-            Text("다가감 감지", fontSize = 14.sp, color = Sub)
-            var bleList by remember { mutableStateOf(listOf<String>()) }
-            var bleSel by remember { mutableStateOf(p.bleAddress) }
-            Button({
-                showBle = true; bleList = listOf("10초간 주변 신호 찾는 중… (차 바로 옆에서)")
-                BleNear.discover(this@MainActivity) { r ->
-                    bleList = r.ifEmpty { listOf("잡힌 신호 없음 — 블루투스/위치 켜졌는지 확인") }
-                    p.log("신호 찾기 결과 ${r.size}개"); r.take(15).forEach { p.log("  $it") }
+                Text(nowTxt, fontSize = 14.sp, color = nowColor, fontWeight = FontWeight.SemiBold)
+                Stepper("이 거리 안으로 걸어오면 열기 (약)", p.unlockMeters, "m", 2, 30, listOf(3, 5, 8, 10, 12, 15, 20, 25, 30)) {
+                    p.unlockMeters = it; metersNow = it; p.log("열기 거리 저장: 약 ${it}m (세기 ${p.bleRssi} 이상)")
                 }
-            }, Modifier.fillMaxWidth()) { Text("차 옆에서 신호 찾기 (10초)") }
-            Text("선택된 접근 신호: ${bleSel.ifBlank { "자동(표준 디지털키)" }}", fontSize = 13.sp, color = Txt)
-            if (showBle) bleList.forEach { line ->
-                val mac = line.substringBefore(" ")
-                TextButton({ if (mac.count { it == ':' } == 5) {
-                    p.bleAddress = mac; bleSel = mac; showBle = false
-                    // 차 바로 옆에서 잰 세기 = 거리 환산 기준(약 1m)
-                    Regex("세기=(-?\\d+)").find(line)?.groupValues?.get(1)?.toIntOrNull()?.let {
-                        p.bleRef1m = it.coerceIn(-80, -40); p.log("거리 기준 저장: 차 옆 세기 ${p.bleRef1m}")
+                val n = p.calSamples.split(",").count { it.isNotBlank() }
+                Text("거리 자동 보정: 기록 ${n}개 · 차 옆(1m) 세기 ${p.bleRef1m}\n" +
+                    "차에 타거나 차 옆에서 열기/잠금을 누를 때마다 그때 신호로 스스로 맞춰요. 쓸수록 정확해져요.",
+                    fontSize = 12.sp, color = Sub)
+                var remoteOn by remember { mutableStateOf(p.approachRemote) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("디지털키가 안 붙어도 원격으로 열기", fontSize = 14.sp, color = Txt)
+                        Text("끔(권장): 멀리서 열리는 일 없음", fontSize = 12.sp, color = Sub)
                     }
-                } }) {
-                    Text(line, fontSize = 12.sp)
+                    Switch(remoteOn, { remoteOn = it; p.approachRemote = it; p.log("자동 열기 원격 ${if (it) "허용" else "끔"}") })
                 }
             }
 
-            Text("차량 블루투스(오디오): ${p.carBtName.ifBlank { "자동(이름에 EV6)" }}", fontSize = 13.sp, color = Txt)
-            OutlinedButton({ showBt = !showBt }, Modifier.fillMaxWidth()) { Text("차량 블루투스 직접 선택") }
-            if (showBt) bondedDevices().forEach { (n, a) ->
-                TextButton({ p.carBtName = n; p.carBtAddress = a; showBt = false }) { Text("$n ($a)") }
-            }
-
-            // ── 배터리 절약 ──
-            Text("배터리 절약", fontSize = 14.sp, color = Sub)
-            var ms by remember { mutableStateOf(p.motionSave) }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(ms, { ms = it; p.motionSave = it; if (!it) { p.bleActive = true; BleNear.start(this@MainActivity, quiet = true) } })
-                Spacer(Modifier.width(10.dp))
-                Text("5분간 가만히 있으면 절전 감시 (걸으면 바로 빠른 감시)", fontSize = 14.sp, color = Txt)
-            }
-            Text("이 와이파이에 연결돼 있으면 차 감시 쉼 (집·회사·교회 등)", fontSize = 14.sp, color = Txt)
-            Text("연결됐던 와이파이 중 체크하세요 (여러 개 가능)", fontSize = 12.sp, color = Sub)
-            var homes by remember { mutableStateOf(PowerSaver.homeList(p)) }
-            val cur = PowerSaver.currentSsid
-            // 기록 + 이미 등록한 것 + 지금 연결된 것 → 한 목록에 체크박스로
-            val all = (listOfNotNull(cur.ifEmpty { null }) + homes + PowerSaver.history(p)).distinct()
-            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card2)) {
-                if (all.isEmpty()) Text("아직 기록 없음 — 와이파이에 연결되면 여기 나타나요",
-                    fontSize = 13.sp, color = Sub, modifier = Modifier.padding(14.dp))
-                all.forEach { s ->
-                    val on = s in homes
-                    Row(
-                        Modifier.fillMaxWidth().clickable {
-                            if (on) PowerSaver.removeHome(p, s) else PowerSaver.addHome(p, s)
-                            homes = PowerSaver.homeList(p)
-                        }.padding(horizontal = 8.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(on, {
-                            if (on) PowerSaver.removeHome(p, s) else PowerSaver.addHome(p, s)
-                            homes = PowerSaver.homeList(p)
-                        })
-                        Text(s, fontSize = 14.sp, color = Txt, modifier = Modifier.weight(1f))
-                        if (s == cur) Text("연결됨", fontSize = 12.sp, color = Green, modifier = Modifier.padding(end = 10.dp))
+            // ── 2. 멀어지면 잠금 ──
+            Section("멀어지면 잠금", "내린 뒤 ${stepsNow}걸음 걸어서 멀어지면 잠금",
+                icon = R.drawable.ic_btn_lock, iconBg = Green.copy(alpha = 0.18f)) {
+                Stepper("이만큼 걸어서 멀어지면 잠금", p.stepThreshold, "걸음", 5, 200, listOf(5, 10, 15, 20, 25, 30, 40, 50, 70)) {
+                    p.stepThreshold = it; stepsNow = it; p.log("설정 저장: 잠금 걸음 ${it}걸음")
+                }
+                Stepper("예비 확인 (실시간 감지를 놓쳤을 때)", p.lockDelayMin, "분", 1, 30, listOf(1, 2, 3, 5, 10, 15)) {
+                    p.lockDelayMin = it; p.log("설정 저장: 예비 확인 ${it}분")
+                }
+                Text("가만히 있을 때 조금씩 움직인 걸음은 세지 않아요 (지금 걷는 중일 때만)", fontSize = 12.sp, color = Sub)
+                var lockRemote by remember { mutableStateOf(p.leaveRemote) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("디지털키가 끊겨도 원격으로 잠금", fontSize = 14.sp, color = Txt)
+                        Text("켬(권장): 멀어지면 디지털키가 끊기므로 원격으로 확실히 잠가요", fontSize = 12.sp, color = Sub)
                     }
+                    Switch(lockRemote, { lockRemote = it; p.leaveRemote = it; p.log("자동 잠금 원격 ${if (it) "허용" else "끔"}") })
                 }
             }
-            var manual by remember { mutableStateOf("") }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(manual, { manual = it }, label = { Text("와이파이 이름 직접 입력") },
-                    singleLine = true, modifier = Modifier.weight(1f))
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton({ PowerSaver.addHome(p, manual); manual = ""; homes = PowerSaver.homeList(p) }) { Text("추가") }
-            }
-            Text("※ 주차장까지 잡히는 와이파이(예: 회사 주차장)는 넣지 마세요 — 연결된 동안 다가가도 안 열려요",
-                fontSize = 12.sp, color = Sub)
 
-            Text("자동 잠금", fontSize = 14.sp, color = Sub)
-            var steps by remember { mutableStateOf(p.stepThreshold.toString()) }
-            var delay by remember { mutableStateOf(p.lockDelayMin.toString()) }
-            var saved by remember { mutableStateOf("") }
-            val dirty = steps != p.stepThreshold.toString() || delay != p.lockDelayMin.toString()
-            OutlinedTextField(steps, { steps = it.filter(Char::isDigit).take(3); saved = "" },
-                label = { Text("이만큼 걸어서 멀어지면 바로 잠금 (걸음, 5~200)") }, singleLine = true,
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(delay, { delay = it.filter(Char::isDigit).take(2); saved = "" },
-                label = { Text("예비 확인(분, 1~30) — 실시간 감지를 놓쳤을 때만") }, singleLine = true,
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth())
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // ── 3. 차 연결 ──
+            Section("차 신호 등록", if (p.bleAddress.isBlank()) "아직 등록 안 됨 — 차 옆에서 눌러 등록" else "등록됨 · ${p.carBtName.ifBlank { "오디오: EV6" }}", emoji = "🚗",
+                open0 = p.bleAddress.isBlank()) {
+                var bleList by remember { mutableStateOf(listOf<String>()) }
+                var bleSel by remember { mutableStateOf(p.bleAddress) }
                 Button({
-                    val s = steps.toIntOrNull()?.coerceIn(5, 200) ?: p.stepThreshold
-                    val d = delay.toIntOrNull()?.coerceIn(1, 30) ?: p.lockDelayMin
-                    p.stepThreshold = s; p.lockDelayMin = d
-                    steps = s.toString(); delay = d.toString()
-                    p.log("설정 저장: ${s}걸음 · 예비 ${d}분")
-                    saved = "✓ 저장했어요 (${s}걸음 · 예비 ${d}분)"
-                }, enabled = dirty) { Text("저장") }
-                Spacer(Modifier.width(12.dp))
-                Text(if (dirty) "바꾼 값은 '저장'을 눌러야 적용돼요" else saved.ifEmpty { "저장됨" },
-                    fontSize = 13.sp, color = if (dirty) Red else Green)
-            }
-
-            // ── 다가가면 열기 ──
-            Text("다가가면 열기", fontSize = 14.sp, color = Sub)
-            var meters by remember { mutableStateOf(p.unlockMeters.toFloat()) }
-            Text("차에서 약 ${meters.toInt()}m 안으로 걸어오면 열기 시작", fontSize = 14.sp, color = Txt)
-            Slider(meters, { meters = it }, valueRange = 3f..20f, steps = 16,
-                onValueChangeFinished = { p.unlockMeters = meters.toInt(); p.log("열기 거리 저장: 약 ${meters.toInt()}m (신호 세기 ${p.bleRssi} 이상)") })
-            Text("거리는 신호 세기로 환산한 대략값이에요(주머니·벽에 따라 ±50%). 너무 멀게 하면 실내에서도 열릴 수 있어요. " +
-                "기록에 '세기 -70, 약 5m'처럼 보이니 실제 거리와 비교해 맞추세요.", fontSize = 12.sp, color = Sub)
-            var remoteOn by remember { mutableStateOf(p.approachRemote) }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(remoteOn, { remoteOn = it; p.approachRemote = it })
-                Spacer(Modifier.width(10.dp))
-                Column {
-                    Text("디지털키가 안 붙어도 원격으로 열기", fontSize = 14.sp, color = Txt)
-                    Text("끔(권장): 차 근처에서 디지털키가 연결될 때만 열어요 — 멀리서 열리는 일 없음", fontSize = 12.sp, color = Sub)
+                    bleList = listOf("10초간 주변 신호 찾는 중… (차 바로 옆에서)")
+                    BleNear.discover(ctx) { r ->
+                        bleList = r.ifEmpty { listOf("잡힌 신호 없음 — 블루투스/위치 켜졌는지 확인") }
+                        p.log("신호 찾기 결과 ${r.size}개"); r.take(15).forEach { p.log("  $it") }
+                    }
+                }, Modifier.fillMaxWidth()) { Text("차 옆에서 신호 찾기 (10초)") }
+                Text("선택된 신호: ${bleSel.ifBlank { "없음" }}", fontSize = 13.sp, color = Txt)
+                if (bleList.isNotEmpty()) Text("맨 위(가장 센 신호)를 누르세요", fontSize = 12.sp, color = Sub)
+                bleList.forEach { line ->
+                    val mac = line.substringBefore(" ")
+                    TextButton({ if (mac.count { it == ':' } == 5) {
+                        p.bleAddress = mac; bleSel = mac; bleList = emptyList()
+                        Regex("세기=(-?\\d+)").find(line)?.groupValues?.get(1)?.toIntOrNull()?.let {
+                            p.bleRef1m = it.coerceIn(-80, -40); p.calSamples = "${p.bleRef1m}"
+                            p.log("거리 기준 저장: 차 옆 세기 ${p.bleRef1m}")
+                        }
+                        Toast.makeText(ctx, "✓ 차 신호를 등록했어요", Toast.LENGTH_SHORT).show()
+                        BleNear.start(ctx, quiet = true)
+                    } }) { Text(line, fontSize = 12.sp) }
+                }
+                var showBt by remember { mutableStateOf(false) }
+                var btName by remember { mutableStateOf(p.carBtName) }
+                Text("차량 블루투스(오디오): ${btName.ifBlank { "자동 (이름에 EV6)" }}", fontSize = 13.sp, color = Txt)
+                OutlinedButton({ showBt = !showBt }, Modifier.fillMaxWidth()) { Text("차량 블루투스 직접 선택") }
+                if (showBt) bondedDevices().forEach { (nm, a) ->
+                    TextButton({ p.carBtName = nm; p.carBtAddress = a; btName = nm; showBt = false }) { Text("$nm ($a)") }
                 }
             }
 
-            Text("기아 앱 조작", fontSize = 14.sp, color = Sub)
-            Button({
-                if (!KiaAutoService.isConnected) p.log("접근성부터 켜세요")
-                else {
-                    KiaAutoService.arm("learn", "")
-                    packageManager.getLaunchIntentForPackage("com.kia.oneapp.kr")?.let { startActivity(it) }
+            // ── 4. 배터리 절약 ──
+            Section("배터리 절약", "집·회사 와이파이 ${PowerSaver.homeList(p).size}곳에서 감시 쉼", emoji = "🔋") {
+                var ms by remember { mutableStateOf(p.motionSave) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("5분간 가만히 있으면 절전 감시", fontSize = 14.sp, color = Txt, modifier = Modifier.weight(1f))
+                    Switch(ms, { ms = it; p.motionSave = it; if (!it) { p.bleActive = true; BleNear.start(ctx, quiet = true) } })
                 }
-            }, Modifier.fillMaxWidth()) { Text("기아 앱 화면 학습 (90초)") }
-            var kpin by remember { mutableStateOf(p.kiaPin) }
-            OutlinedTextField(kpin, { kpin = it; p.kiaPin = it }, label = { Text("원격제어 PIN (필요할 때만)") },
-                visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                Text("이 와이파이에 연결돼 있으면 차 감시 쉼 (여러 개 체크)", fontSize = 14.sp, color = Txt)
+                var homes by remember { mutableStateOf(PowerSaver.homeList(p)) }
+                val cur = PowerSaver.currentSsid
+                val all = (listOfNotNull(cur.ifEmpty { null }) + homes + PowerSaver.history(p)).distinct()
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card1)) {
+                    if (all.isEmpty()) Text("아직 기록 없음 — 와이파이에 연결되면 여기 나타나요",
+                        fontSize = 13.sp, color = Sub, modifier = Modifier.padding(14.dp))
+                    all.forEach { s ->
+                        val on = s in homes
+                        val toggle = { if (on) PowerSaver.removeHome(p, s) else PowerSaver.addHome(p, s); homes = PowerSaver.homeList(p) }
+                        Row(Modifier.fillMaxWidth().clickable { toggle() }.padding(horizontal = 8.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(on, { toggle() })
+                            Text(s, fontSize = 14.sp, color = Txt, modifier = Modifier.weight(1f))
+                            if (s == cur) Text("연결됨", fontSize = 12.sp, color = Green, modifier = Modifier.padding(end = 10.dp))
+                        }
+                    }
+                }
+                var manual by remember { mutableStateOf("") }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(manual, { manual = it }, label = { Text("와이파이 이름 직접 입력") },
+                        singleLine = true, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton({ PowerSaver.addHome(p, manual); manual = ""; homes = PowerSaver.homeList(p) }, enabled = manual.isNotBlank()) { Text("추가") }
+                }
+                Text("※ 주차장까지 잡히는 와이파이는 넣지 마세요 — 연결된 동안 다가가도 안 열려요", fontSize = 12.sp, color = Sub)
+            }
+
+            // ── 5. 업데이트 ──
+            Section("업데이트", "현재 v${Updater.installedVersion(ctx)}", emoji = "⬆️") {
+                var au by remember { mutableStateOf(p.autoUpdate) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("새 버전 자동 확인 (12시간마다)", fontSize = 14.sp, color = Txt)
+                        Text("인터넷은 GitHub에서 새 버전 확인·다운로드에만 써요", fontSize = 12.sp, color = Sub)
+                    }
+                    Switch(au, { au = it; p.autoUpdate = it; Updater.schedule(ctx) })
+                }
+                var chk by remember { mutableStateOf("") }
+                OutlinedButton({
+                    chk = "확인 중…"
+                    sc.launch {
+                        val ok = withContext(Dispatchers.IO) { Updater.fetch(ctx) }
+                        chk = when {
+                            !ok -> "확인 실패 — 인터넷 연결을 확인하세요"
+                            Updater.hasUpdate(ctx) -> "새 버전 ${p.updTag} 이 있어요 — 첫 화면 위쪽 '업데이트'를 누르세요"
+                            else -> "✓ 최신 버전이에요"
+                        }
+                    }
+                }, Modifier.fillMaxWidth()) { Text("지금 새 버전 확인") }
+                if (chk.isNotEmpty()) Text(chk, fontSize = 13.sp, color = Txt)
+            }
+
+            // ── 6. 문제 해결 ──
+            Section("문제 해결", "자가 진단 · 테스트 · 기아 앱 학습", emoji = "🛠️") {
+                Button({ KiaAutoService.instance?.selfTest() ?: p.log("자가 진단: 접근성이 꺼져 있음"); Toast.makeText(ctx, "진단 시작 — 결과는 '최근 활동'에", Toast.LENGTH_SHORT).show() },
+                    Modifier.fillMaxWidth()) { Text("자가 진단 (결과는 활동 기록에)") }
+                OutlinedButton({ KiaAutoService.instance?.testLeaveWatch() ?: p.log("접근성이 꺼져 있음") },
+                    Modifier.fillMaxWidth()) { Text("멀어짐 잠금 테스트 (실제로 잠금 요청됨)") }
+                OutlinedButton({
+                    if (!KiaAutoService.isConnected) p.log("접근성부터 켜세요")
+                    else { KiaAutoService.arm("learn", ""); packageManager.getLaunchIntentForPackage("com.kia.oneapp.kr")?.let { startActivity(it) } }
+                }, Modifier.fillMaxWidth()) { Text("기아 앱 화면 학습 (90초)") }
+                var kpin by remember { mutableStateOf(p.kiaPin) }
+                OutlinedTextField(kpin, { kpin = it; p.kiaPin = it }, label = { Text("원격제어 PIN (필요할 때만)") },
+                    visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+            }
         }
     }
 }
