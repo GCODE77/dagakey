@@ -112,6 +112,12 @@ class Prefs(ctx: Context) {
     var lastLockAt: Long
         get() = sp.getLong("lastLockAt", 0)
         set(v) = sp.edit().putLong("lastLockAt", v).apply()
+    /** 폰 잠금 때문에 주머니 속에서 기아 앱을 못 띄운 마지막 시각 (안내 표시용) */
+    var lastPocketFailAt: Long
+        get() = sp.getLong("pocketFail", 0)
+        set(v) = sp.edit().putLong("pocketFail", v).apply()
+    /** 위젯 버튼 순서 (예: "UNLOCK,LOCK,TRUNK") */
+    var widgetOrder by str("widgetOrder")
     /** 마지막으로 누른 버튼(앱·위젯 공통) — 화면을 다시 열어도 '어느 걸 눌렀는지' 보이게 */
     var lastTap by str("lastTap")
     var lastTapAt: Long

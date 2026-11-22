@@ -1,5 +1,14 @@
 package com.glory.ev6lock
 
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.zIndex
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
@@ -89,6 +98,13 @@ class MainActivity : ComponentActivity() {
     }
 
     /** 배터리 '제한 없음' 화면으로 이동 (삼성은 요청창이 막히는 경우가 있어 단계별로 시도) */
+    /** 잠금화면 설정 (여기 '잠금 해제 유지 → 몸에 지니고 있을 때') */
+    private fun openLockScreenSettings() {
+        Toast.makeText(this, "'잠금 해제 유지' → '몸에 지니고 있을 때'를 켜세요", Toast.LENGTH_LONG).show()
+        try { startActivity(Intent("android.settings.LOCK_SCREEN_SETTINGS")) }
+        catch (_: Exception) { startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) }
+    }
+
     private fun openBattery() {
         val pkg = Uri.parse("package:$packageName")
         val tries = listOf(
@@ -318,6 +334,11 @@ class MainActivity : ComponentActivity() {
                     if (!sig) CheckRow("차 신호 등록 (차 옆에서)", false, "눌러서 등록") { settingsPage = "차 신호 등록"; showSettings = true }
                     if (demo) CheckRow("실제 차량 제어", false, "테스트 모드 · 눌러서 끄기") { demo = false; p.demoMode = false }
                 }
+            }
+            // ── 주머니 속 실패가 최근 2주 안에 있었으면: '잠금 해제 유지' 안내 카드 ──
+            val pocketFail = remember(tick) { System.currentTimeMillis() - p.lastPocketFailAt < 14L * 24 * 3600_000 }
+            if (pocketFail) Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Card1)) {
+                CheckRow("주머니 속에서도 열리게 (잠금 해제 유지)", false, "눌러서 켜기") { openLockScreenSettings() }
             }
 
             Spacer(Modifier.weight(1f))
@@ -593,6 +614,15 @@ class MainActivity : ComponentActivity() {
                 Text("거리 자동 보정: 기록 ${n}개 · 차 옆(1m) 세기 ${p.bleRef1m}\n" +
                     "차에 타거나 차 옆에서 열기/잠금을 누를 때마다 그때 신호로 스스로 맞춰요. 쓸수록 정확해져요.",
                     fontSize = 12.sp, color = Sub)
+                // 주머니 속(화면 꺼짐·잠김)에서도 열리게
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card1).padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("📱 주머니 속에서도 열리게", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Txt)
+                    Text("화면이 꺼져 있어도 다가키가 화면을 켜요. 하지만 지문·PIN 잠금은 어떤 앱도 대신 풀 수 없어서, " +
+                        "폰이 잠겨 있으면 기아 앱을 못 띄워요.\n→ 잠금 해제 유지 → '몸에 지니고 있을 때'를 켜면, 폰을 한 번 풀고 주머니에 넣은 뒤로는 " +
+                        "몸에 지니는 동안 잠기지 않아 주머니 속에서도 열려요. (내려놓으면 다시 잠김)", fontSize = 12.sp, color = Sub)
+                    OutlinedButton({ openLockScreenSettings() }, Modifier.fillMaxWidth()) { Text("잠금 해제 유지 설정 열기") }
+                }
                 var remoteOn by remember { mutableStateOf(p.approachRemote) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -694,6 +724,93 @@ class MainActivity : ComponentActivity() {
             }
 
             // ── 5. 업데이트 ──
+            // ── 위젯: 버튼을 끌어서 칸에 넣기 (1~3개 자유) ──
+            var wSaved by remember { mutableStateOf(DagaWidget.order(p)) }
+            fun wDesc(o: List<String>) = o.filter { it.isNotEmpty() }.joinToString(" · ") { DagaWidget.label(it) }.ifEmpty { "비어 있음" }
+            Section("위젯", "버튼: " + wDesc(wSaved), emoji = "🧩") {
+                var slots by remember { mutableStateOf(wSaved) }
+                val slotRects = remember { mutableStateMapOf<Int, Rect>() }
+                var dragKey by remember { mutableStateOf<String?>(null) }
+                var dragStart by remember { mutableStateOf(Offset.Zero) }
+                var dragDelta by remember { mutableStateOf(Offset.Zero) }
+                var hover by remember { mutableStateOf(-1) }
+                fun put(k: String, i: Int) { slots = slots.map { if (it == k) "" else it }.toMutableList().also { it[i] = k } }
+
+                Text("아래 버튼을 끌어서 위젯 칸에 놓으세요", fontSize = 14.sp, color = Txt)
+                // 위젯 미리보기 (실제 위젯과 같은 모양)
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Bg).padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(Modifier.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Image(painterResource(R.drawable.ic_btn_unlock), null, Modifier.size(16.dp))   // (적응형 앱 아이콘은 그릴 수 없음)
+                        Text(" 다가키", fontSize = 12.sp, color = Txt, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        Text("앱 열기 ›", fontSize = 11.sp, color = Sub)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        slots.forEachIndexed { i, k ->
+                            val hot = hover == i
+                            Box(Modifier.weight(1f).height(60.dp)
+                                .onGloballyPositioned { slotRects[i] = it.boundsInRoot() }
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(if (hot) Blue.copy(alpha = 0.35f) else if (k.isEmpty()) Card1 else Card2)
+                                .border(2.dp, if (hot) Blue else if (k.isEmpty()) Sub.copy(alpha = 0.4f) else Color.Transparent, RoundedCornerShape(14.dp))
+                                .clickable(enabled = k.isNotEmpty()) { slots = slots.toMutableList().also { it[i] = "" } },
+                                contentAlignment = Alignment.Center) {
+                                if (k.isEmpty()) Text("빈 칸", fontSize = 12.sp, color = Sub)
+                                else Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Image(painterResource(DagaWidget.icon(k)), null, Modifier.size(20.dp))
+                                    Text(" " + DagaWidget.label(k), fontSize = 13.sp, color = Txt, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+                Text("칸을 누르면 비워져요 · 빈 칸은 위젯에서 사라지고 남은 버튼이 넓어져요", fontSize = 12.sp, color = Sub)
+
+                // 끌어다 놓을 버튼들 (눌러도 첫 빈 칸에 들어감)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DagaWidget.KEYS.forEach { k ->
+                        var origin by remember { mutableStateOf(Offset.Zero) }
+                        val dragging = dragKey == k
+                        Box(Modifier.weight(1f).height(56.dp)
+                            .zIndex(if (dragging) 1f else 0f)
+                            .onGloballyPositioned { origin = it.boundsInRoot().center }
+                            .graphicsLayer { if (dragging) { translationX = dragDelta.x; translationY = dragDelta.y; scaleX = 1.08f; scaleY = 1.08f } }
+                            .clip(RoundedCornerShape(14.dp)).background(if (dragging) Blue else Card1)
+                            .pointerInput(k) {
+                                detectDragGestures(
+                                    onDragStart = { dragKey = k; dragStart = origin; dragDelta = Offset.Zero },
+                                    onDrag = { ch, amt ->
+                                        ch.consume(); dragDelta += amt
+                                        val at = dragStart + dragDelta
+                                        hover = slotRects.entries.firstOrNull { it.value.contains(at) }?.key ?: -1
+                                    },
+                                    onDragEnd = { if (hover >= 0) put(k, hover); dragKey = null; hover = -1; dragDelta = Offset.Zero },
+                                    onDragCancel = { dragKey = null; hover = -1; dragDelta = Offset.Zero })
+                            }
+                            .clickable { val e = slots.indexOfFirst { it.isEmpty() }; if (e >= 0) put(k, e) },
+                            contentAlignment = Alignment.Center) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Image(painterResource(DagaWidget.icon(k)), null, Modifier.size(20.dp))
+                                Text(" " + DagaWidget.label(k), fontSize = 13.sp, color = Txt, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button({
+                        p.widgetOrder = slots.joinToString(","); wSaved = slots
+                        DagaWidget.refresh(ctx, null); p.log("위젯 저장: " + wDesc(slots))
+                        Toast.makeText(ctx, "✓ 위젯을 저장했어요", Toast.LENGTH_SHORT).show()
+                    }, enabled = slots != wSaved) { Text("저장") }
+                    Spacer(Modifier.width(12.dp))
+                    Text(if (slots != wSaved) "아직 저장 안 됨" else "✓ 저장됨", fontSize = 13.sp, color = if (slots != wSaved) Red else Green)
+                    Spacer(Modifier.weight(1f))
+                    TextButton({ slots = DagaWidget.KEYS }) { Text("기본값") }
+                }
+                Text("위젯 추가: 홈 화면 빈 곳을 길게 누르기 → 위젯 → 다가키 (3×1). 예전 위젯은 지우고 다시 추가하세요.",
+                    fontSize = 12.sp, color = Sub)
+            }
+
             Section("업데이트", "현재 v${Updater.installedVersion(ctx)}", emoji = "⬆️") {
                 var au by remember { mutableStateOf(p.autoUpdate) }
                 Row(verticalAlignment = Alignment.CenterVertically) {

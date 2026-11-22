@@ -91,6 +91,20 @@ object Notifier {
             .build()
     )
 
+    /** 주머니 속에서 폰 잠금 때문에 못 열었을 때: '잠금 해제 유지' 켜는 방법 안내 → 누르면 잠금화면 설정 */
+    fun pocketTip(ctx: Context) {
+        val pi = PendingIntent.getActivity(ctx, 44,
+            Intent("android.settings.LOCK_SCREEN_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val t = "폰이 잠겨 있어 주머니 속에서 열지 못했어요.\n설정 → 잠금화면 및 AOD → 잠금 해제 유지 → '몸에 지니고 있을 때'를 켜면 주머니 속에서도 열려요. (눌러서 설정 열기)"
+        nm(ctx).notify(7, Notification.Builder(ctx, CH)
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setContentTitle("주머니 속에서도 열리게 하기")
+            .setContentText("눌러서 '잠금 해제 유지' 켜기")
+            .setStyle(Notification.BigTextStyle().bigText(t))
+            .setContentIntent(pi).setAutoCancel(true).build())
+    }
+
     /** 상단에 항상 떠 있는 빠른 제어 바 — 차 근처에서 한 번 눌러 디지털키로 열기/잠금 */
     fun persistent(ctx: Context) = nm(ctx).notify(
         3, Notification.Builder(ctx, CH_LOW)

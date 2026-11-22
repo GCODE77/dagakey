@@ -1,31 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 한 줄(1칸 높이) 위젯: [다가키(누르면 앱 열기)] [열기] [잠금] [트렁크] -->
+<!-- 3×1 위젯: 위 1/3 = 제목 줄(누르면 앱 열기, 가로 전체) / 아래 2/3 = 버튼 3개(순서는 앱 설정에서) -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent" android:layout_height="match_parent"
-    android:orientation="horizontal" android:padding="5dp" android:gravity="center_vertical"
-    android:background="@drawable/widget_bg">
-  <LinearLayout android:id="@+id/w_app" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1.15"
-      android:orientation="vertical" android:gravity="center" android:background="@drawable/widget_btn_app" android:layout_marginEnd="4dp">
-    <ImageView android:layout_width="22dp" android:layout_height="22dp" android:src="@mipmap/ic_launcher"/>
-    <TextView android:id="@+id/w_title" android:layout_width="wrap_content" android:layout_height="wrap_content"
-        android:text="다가키" android:textColor="#FF8C98A8" android:textSize="10sp" android:maxLines="1" android:ellipsize="end"/>
+    android:orientation="vertical" android:padding="5dp" android:background="@drawable/widget_bg">
+  <LinearLayout android:id="@+id/w_app" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+      android:orientation="horizontal" android:gravity="center_vertical" android:paddingStart="8dp" android:paddingEnd="8dp"
+      android:background="@drawable/widget_btn_app" android:layout_marginBottom="3dp">
+    <ImageView android:layout_width="16dp" android:layout_height="16dp" android:src="@mipmap/ic_launcher"/>
+    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="6dp"
+        android:text="다가키" android:textColor="#FFEAF0F7" android:textSize="12sp" android:textStyle="bold"/>
+    <TextView android:id="@+id/w_title" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+        android:layout_marginStart="8dp" android:gravity="end" android:text="앱 열기 ›"
+        android:textColor="#FF8C98A8" android:textSize="11sp" android:maxLines="1" android:ellipsize="end"/>
   </LinearLayout>
-  <LinearLayout android:id="@+id/w_unlock" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
-      android:orientation="vertical" android:gravity="center" android:background="@drawable/widget_btn" android:layout_marginEnd="4dp">
-    <ImageView android:layout_width="22dp" android:layout_height="22dp" android:src="@drawable/ic_btn_unlock"/>
-    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="열기"
-        android:textColor="#FFFFFFFF" android:textSize="11sp" android:textStyle="bold"/>
-  </LinearLayout>
-  <LinearLayout android:id="@+id/w_lock" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
-      android:orientation="vertical" android:gravity="center" android:background="@drawable/widget_btn" android:layout_marginEnd="4dp">
-    <ImageView android:layout_width="22dp" android:layout_height="22dp" android:src="@drawable/ic_btn_lock"/>
-    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="잠금"
-        android:textColor="#FFEAF0F7" android:textSize="11sp" android:textStyle="bold"/>
-  </LinearLayout>
-  <LinearLayout android:id="@+id/w_trunk" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
-      android:orientation="vertical" android:gravity="center" android:background="@drawable/widget_btn">
-    <ImageView android:layout_width="22dp" android:layout_height="22dp" android:src="@drawable/ic_btn_trunk"/>
-    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="트렁크"
-        android:textColor="#FFEAF0F7" android:textSize="11sp" android:textStyle="bold"/>
+  <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="2" android:orientation="horizontal">
+    <LinearLayout android:id="@+id/w_b1" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+        android:orientation="horizontal" android:gravity="center" android:background="@drawable/widget_btn" android:layout_marginEnd="4dp">
+      <ImageView android:id="@+id/w_i1" android:layout_width="22dp" android:layout_height="22dp"/>
+      <TextView android:id="@+id/w_t1" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="4dp"
+          android:textColor="#FFEAF0F7" android:textSize="13sp" android:textStyle="bold"/>
+    </LinearLayout>
+    <LinearLayout android:id="@+id/w_b2" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+        android:orientation="horizontal" android:gravity="center" android:background="@drawable/widget_btn" android:layout_marginEnd="4dp">
+      <ImageView android:id="@+id/w_i2" android:layout_width="22dp" android:layout_height="22dp"/>
+      <TextView android:id="@+id/w_t2" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="4dp"
+          android:textColor="#FFEAF0F7" android:textSize="13sp" android:textStyle="bold"/>
+    </LinearLayout>
+    <LinearLayout android:id="@+id/w_b3" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+        android:orientation="horizontal" android:gravity="center" android:background="@drawable/widget_btn">
+      <ImageView android:id="@+id/w_i3" android:layout_width="22dp" android:layout_height="22dp"/>
+      <TextView android:id="@+id/w_t3" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="4dp"
+          android:textColor="#FFEAF0F7" android:textSize="13sp" android:textStyle="bold"/>
+    </LinearLayout>
   </LinearLayout>
 </LinearLayout>

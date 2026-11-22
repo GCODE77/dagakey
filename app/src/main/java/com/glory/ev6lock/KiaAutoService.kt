@@ -233,6 +233,10 @@ class KiaAutoService : AccessibilityService() {
         val what = actionName()
         p.log("주머니 속이라 기아 앱이 안 보임 → 폰 화면을 켜면 바로 $what 마무리 (15분간 대기)")
         Notifier.askUnlockPhone(applicationContext, what)
+        // 폰 잠금(지문·PIN)은 다른 앱이 풀 수 없음 → '잠금 해제 유지(몸에 지니고 있을 때)' 안내 (하루 1번)
+        val now = System.currentTimeMillis()
+        if (now - p.lastPocketFailAt > 24 * 3600_000L) Notifier.pocketTip(applicationContext)
+        p.lastPocketFailAt = now
         h.postDelayed({ if (deferred) { p.log("15분 지나 $what 대기 종료"); done() } }, 15 * 60_000)
     }
     private fun resumeDeferred() {
