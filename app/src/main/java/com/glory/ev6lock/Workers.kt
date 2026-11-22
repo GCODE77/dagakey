@@ -17,6 +17,7 @@ class LockWorker(ctx: Context, ps: WorkerParameters) : CoroutineWorker(ctx, ps) 
         val force = inputData.getBoolean("force", false)
 
         // ★ 실측: 주행 중(차 오디오 연결)에 자동 잠금이 실행된 사례 → 차 안이면 자동 잠금 안 함
+        if (!force && (!p.masterOn || !p.autoLock || p.braked)) { p.log("자동 잠금 꺼짐 → 예비 잠금 취소"); return Result.success() }
         if (!force && p.inCar) { p.log("차 안/주행 중 → 자동 잠금 취소"); return Result.success() }
         // ★ 실측: 이미 잠갔는데 예비 잠금이 1시간 동안 '아직 차 근처'를 반복하다 또 잠금 → 하차 이후 잠갔으면 종료
         if (!force && p.lastLockAt >= p.parkedAt) { p.log("이미 잠금 완료 — 예비 잠금 종료"); return Result.success() }

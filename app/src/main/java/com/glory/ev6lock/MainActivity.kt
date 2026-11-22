@@ -67,7 +67,7 @@ class MainActivity : ComponentActivity() {
             )
         )
         val p = Prefs(this)
-        p.autoLock = true; p.approachUnlock = true; p.autoUnlock = true; p.useAppAutomation = true
+        p.autoUnlock = true; p.useAppAutomation = true   // (자동 잠금/열기 켜기·끄기는 사용자 설정을 그대로 둠)
         Notifier.persistent(this)
         Updater.schedule(this)                                  // 12시간마다 새 버전 확인
         wantUpdate = intent?.getBooleanExtra("update", false) == true   // 알림을 눌러 들어온 경우
@@ -211,7 +211,18 @@ class MainActivity : ComponentActivity() {
 
             // ── 히어로: 지금 차 상태를 한눈에 ──
             val inCar = remember(tick) { p.inCar }
+            var master by remember { mutableStateOf(p.masterOn) }
+            var autoLockOn by remember { mutableStateOf(p.autoLock) }
+            var approachOn by remember { mutableStateOf(p.approachUnlock) }
+            val braked = remember(tick) { p.braked }
+            fun applyAuto() {
+                Notifier.persistent(this@MainActivity)
+                if (master && approachOn) BleNear.start(this@MainActivity, quiet = true) else BleNear.stop(this@MainActivity)
+                if (!master || !autoLockOn) { KiaAutoService.instance?.stopLeaveWatch(); Jobs.cancelLock(this@MainActivity) }
+            }
             val (heroTitle, heroSub, heroColor) = when {
+                !master -> Triple("자동 꺼짐", "자동 잠금·열기를 쉬는 중 · 버튼·위젯은 동작해요", Sub)
+                braked -> Triple("잠시 멈춤", "자동 동작이 반복돼 30분간 쉬어요", Red)
                 !allReady -> Triple("설정이 필요해요", "아래 빨간 항목을 눌러 켜주세요", Red)
                 inCar -> Triple("주행 중", "운전 중에는 자동 잠금·열기를 멈춰요", Blue)
                 else -> Triple("자동으로 지키는 중", "멀어지면 잠그고, 다가가면 열어요", Green)
@@ -229,16 +240,32 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         Spacer(Modifier.width(14.dp))
-                        Column {
+                        Column(Modifier.weight(1f)) {
                             Text(heroTitle, fontSize = 21.sp, fontWeight = FontWeight.Bold, color = Txt)
                             Text(heroSub, fontSize = 13.sp, color = Sub)
                         }
+                        // 전체 켜기/끄기
+                        Switch(master, {
+                            master = it; p.masterOn = it
+                            if (it) p.brakeUntil = 0
+                            p.log(if (it) "다가키 자동 켜짐" else "다가키 자동 꺼짐 (수동 버튼·위젯만 동작)")
+                            applyAuto(); tick++
+                        })
                     }
+                    // 따로 켜고 끄기 (눌러서 전환)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Chip("자동 잠금", allReady && !inCar)
-                        Chip("자동 열기", allReady && !inCar)
-                        Chip(if (inCar) "주행 감지" else "차 감시 중", allReady)
+                        Chip("다가가면 열기", master && approachOn && allReady && !inCar, enabled = master) {
+                            approachOn = !approachOn; p.approachUnlock = approachOn
+                            p.log("다가가면 열기 ${if (approachOn) "켬" else "끔"}"); applyAuto()
+                        }
+                        Chip("멀어지면 잠금", master && autoLockOn && allReady && !inCar, enabled = master) {
+                            autoLockOn = !autoLockOn; p.autoLock = autoLockOn
+                            p.log("멀어지면 잠금 ${if (autoLockOn) "켬" else "끔"}"); applyAuto()
+                        }
                     }
+                    if (master) Text(
+                        if (inCar) "주행 중 — 자동 동작 멈춤" else "칩을 눌러 따로 켜고 끌 수 있어요",
+                        fontSize = 11.sp, color = Sub)
                 }
             }
 
@@ -347,15 +374,17 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Chip(label: String, on: Boolean) {
+    private fun Chip(label: String, on: Boolean, enabled: Boolean = true, onClick: (() -> Unit)? = null) {
         Row(
             Modifier.clip(RoundedCornerShape(50)).background(if (on) Green.copy(alpha = 0.14f) else Card2)
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(Modifier.size(7.dp).clip(CircleShape).background(if (on) Green else Sub))
             Spacer(Modifier.width(6.dp))
-            Text(label, fontSize = 12.sp, color = if (on) Txt else Sub, fontWeight = FontWeight.SemiBold)
+            Text(if (onClick != null) "$label ${if (on) "ON" else "OFF"}" else label,
+                fontSize = 12.sp, color = if (on) Txt else Sub, fontWeight = FontWeight.SemiBold)
         }
     }
 
@@ -447,7 +476,13 @@ class MainActivity : ComponentActivity() {
             Text("선택된 접근 신호: ${bleSel.ifBlank { "자동(표준 디지털키)" }}", fontSize = 13.sp, color = Txt)
             if (showBle) bleList.forEach { line ->
                 val mac = line.substringBefore(" ")
-                TextButton({ if (mac.count { it == ':' } == 5) { p.bleAddress = mac; bleSel = mac; showBle = false } }) {
+                TextButton({ if (mac.count { it == ':' } == 5) {
+                    p.bleAddress = mac; bleSel = mac; showBle = false
+                    // 차 바로 옆에서 잰 세기 = 거리 환산 기준(약 1m)
+                    Regex("세기=(-?\\d+)").find(line)?.groupValues?.get(1)?.toIntOrNull()?.let {
+                        p.bleRef1m = it.coerceIn(-80, -40); p.log("거리 기준 저장: 차 옆 세기 ${p.bleRef1m}")
+                    }
+                } }) {
                     Text(line, fontSize = 12.sp)
                 }
             }
@@ -505,11 +540,48 @@ class MainActivity : ComponentActivity() {
 
             Text("자동 잠금", fontSize = 14.sp, color = Sub)
             var steps by remember { mutableStateOf(p.stepThreshold.toString()) }
-            OutlinedTextField(steps, { steps = it; it.toIntOrNull()?.let { v -> p.stepThreshold = v } },
-                label = { Text("이만큼 걸어서 멀어지면 바로 잠금 (걸음)") }, modifier = Modifier.fillMaxWidth())
             var delay by remember { mutableStateOf(p.lockDelayMin.toString()) }
-            OutlinedTextField(delay, { delay = it; it.toIntOrNull()?.let { v -> p.lockDelayMin = v } },
-                label = { Text("예비 확인(분) — 실시간 감지를 놓쳤을 때만") }, modifier = Modifier.fillMaxWidth())
+            var saved by remember { mutableStateOf("") }
+            val dirty = steps != p.stepThreshold.toString() || delay != p.lockDelayMin.toString()
+            OutlinedTextField(steps, { steps = it.filter(Char::isDigit).take(3); saved = "" },
+                label = { Text("이만큼 걸어서 멀어지면 바로 잠금 (걸음, 5~200)") }, singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(delay, { delay = it.filter(Char::isDigit).take(2); saved = "" },
+                label = { Text("예비 확인(분, 1~30) — 실시간 감지를 놓쳤을 때만") }, singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth())
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button({
+                    val s = steps.toIntOrNull()?.coerceIn(5, 200) ?: p.stepThreshold
+                    val d = delay.toIntOrNull()?.coerceIn(1, 30) ?: p.lockDelayMin
+                    p.stepThreshold = s; p.lockDelayMin = d
+                    steps = s.toString(); delay = d.toString()
+                    p.log("설정 저장: ${s}걸음 · 예비 ${d}분")
+                    saved = "✓ 저장했어요 (${s}걸음 · 예비 ${d}분)"
+                }, enabled = dirty) { Text("저장") }
+                Spacer(Modifier.width(12.dp))
+                Text(if (dirty) "바꾼 값은 '저장'을 눌러야 적용돼요" else saved.ifEmpty { "저장됨" },
+                    fontSize = 13.sp, color = if (dirty) Red else Green)
+            }
+
+            // ── 다가가면 열기 ──
+            Text("다가가면 열기", fontSize = 14.sp, color = Sub)
+            var meters by remember { mutableStateOf(p.unlockMeters.toFloat()) }
+            Text("차에서 약 ${meters.toInt()}m 안으로 걸어오면 열기 시작", fontSize = 14.sp, color = Txt)
+            Slider(meters, { meters = it }, valueRange = 3f..20f, steps = 16,
+                onValueChangeFinished = { p.unlockMeters = meters.toInt(); p.log("열기 거리 저장: 약 ${meters.toInt()}m (신호 세기 ${p.bleRssi} 이상)") })
+            Text("거리는 신호 세기로 환산한 대략값이에요(주머니·벽에 따라 ±50%). 너무 멀게 하면 실내에서도 열릴 수 있어요. " +
+                "기록에 '세기 -70, 약 5m'처럼 보이니 실제 거리와 비교해 맞추세요.", fontSize = 12.sp, color = Sub)
+            var remoteOn by remember { mutableStateOf(p.approachRemote) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(remoteOn, { remoteOn = it; p.approachRemote = it })
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text("디지털키가 안 붙어도 원격으로 열기", fontSize = 14.sp, color = Txt)
+                    Text("끔(권장): 차 근처에서 디지털키가 연결될 때만 열어요 — 멀리서 열리는 일 없음", fontSize = 12.sp, color = Sub)
+                }
+            }
 
             Text("기아 앱 조작", fontSize = 14.sp, color = Sub)
             Button({

@@ -37,6 +37,11 @@ class CarBtReceiver : BroadcastReceiver() {
                 ((addr == p.bleAddress && p.bleAddress.isNotBlank()) || (addr == p.dkAddress && p.dkAddress.isNotBlank()))
         val isCarAudioSel = addr == p.carBtAddress && p.carBtAddress.isNotBlank()
 
+        if (!p.masterOn) {   // 전체 꺼짐: 기록만 하고 자동 동작 안 함
+            if (isApproach || isAudio || isCarAudioSel) p.log("블루투스 ${if (connected) "연결" else "끊김"}: $name — 다가키 꺼짐이라 무시")
+            if (isAudio || isCarAudioSel) p.inCar = connected
+            return
+        }
         when {
             isApproach -> onApproachDevice(ctx, p, name, connected)
             isAudio || isCarAudioSel -> onCarAudio(ctx, p, name, connected)

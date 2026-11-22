@@ -37,6 +37,8 @@ class KiaAutoService : AccessibilityService() {
         /** 지금 수행할 동작: "", "lock", "unlock", "learn" */
         @Volatile var pendingAction: String = ""
         @Volatile var pin: String = ""
+        /** 자동 열기: 디지털키가 붙을 때만 열고 원격은 보내지 않음 (멀리서 열리는 사고 방지) */
+        @Volatile var dkOnly: Boolean = false
 
         /** 백그라운드 경로(자동 잠금/열기): 서비스가 화면을 켜고 기아 앱을 띄움 */
         fun request(action: String, pin: String) {
@@ -120,7 +122,7 @@ class KiaAutoService : AccessibilityService() {
         if (isControl()) ensureTicker()
     }
 
-    private fun done() { pendingAction = ""; actionStart = 0L; ticking = false; waitingUnlock = false; pressed = false; launchedAt = 0L; homeTries = 0; remoteSent = false; backDone = false; deferred = false; diagDone = false; dkTaps = 0; dkTapAt = 0L }
+    private fun done() { pendingAction = ""; dkOnly = false; actionStart = 0L; ticking = false; waitingUnlock = false; pressed = false; launchedAt = 0L; homeTries = 0; remoteSent = false; backDone = false; deferred = false; diagDone = false; dkTaps = 0; dkTapAt = 0L }
 
     @Suppress("DEPRECATION")
     private fun wakeScreen() {
@@ -299,7 +301,7 @@ class KiaAutoService : AccessibilityService() {
         if (actionStart == 0L) actionStart = System.currentTimeMillis()
         val elapsed = System.currentTimeMillis() - actionStart
         // 원격을 먼저 보낸 열기는 걸어오는 시간을 고려해 오래 기다림
-        if (elapsed > (if (remoteSent) 100_000 else 40_000)) { p.log("시간 초과 — ${actionName()} 끝 (버튼을 못 찾음)"); done(); return }
+        if (elapsed > (if (remoteSent) 100_000 else if (dkOnly) 70_000 else 40_000)) { p.log("시간 초과 — ${actionName()} 끝 (버튼을 못 찾음)"); done(); return }
 
         val wantLock = pendingAction == "lock"
         val norm = allText.map { it.replace(" ", "") }
@@ -314,6 +316,16 @@ class KiaAutoService : AccessibilityService() {
 
         // ── 열기: ① 원격으로 먼저 열기 요청(느리니까 미리) → ② 디지털키가 붙으면 한 번 더 '잠금 해제' ──
         if (!wantLock) {
+            if (!dkConnected && dkOnly) {
+                // 자동 열기(디지털키 전용): 원격은 보내지 않고 디지털키가 붙을 때까지만 기다림
+                if (elapsed / 1000 % 5 == 0L) p.log("디지털키 연결 대기중… (${elapsed / 1000}초, 원격 안 보냄)")
+                tryConnectDk(root)
+                if (elapsed >= 60_000) {
+                    p.log("디지털키 연결 안 됨 — 차가 아직 멀어서 열지 않음 (자동 열기는 디지털키로만)")
+                    done()
+                }
+                return
+            }
             if (!dkConnected) {
                 if (!remoteSent) {
                     val n = findExact(root, setOf("잠금해제"), visibleOnly = true)
@@ -470,6 +482,8 @@ class KiaAutoService : AccessibilityService() {
     private var leaveWatching = false
     fun startLeaveWatch() {
         if (leaveWatching) return
+        if (!p.masterOn || !p.autoLock) return
+        if (p.braked) { p.log("자동 동작 잠시 멈춤 중 — 멀어짐 감시 생략"); return }
         // ★ 실측: 이미 잠근 뒤 디지털키 모듈이 끊기면서 감시가 또 시작 → 1시간 뒤 차로 '다가가는' 걸음을
         //   '멀어짐'으로 보고 잠가버림. 최근 15분 안에 잠갔으면 시작하지 않음.
         if (System.currentTimeMillis() - p.lastLockAt < 15 * 60_000) { p.log("이미 잠금 완료 — 멀어짐 감시 생략"); return }
@@ -488,8 +502,17 @@ class KiaAutoService : AccessibilityService() {
                     val walked = if (now != null && p.stepsAtPark >= 0) now - p.stepsAtPark else 0f
                     h.post {
                         if (!leaveWatching) return@post
-                        if (walked >= p.stepThreshold) {
+                        // ★ 실측: 실내에서 조금씩 움직인 걸음이 10분 동안 쌓여 '멀어짐'으로 잠김
+                        //   → 누적 걸음 + '지금 걷는 중'(최근 30초에 6걸음 이상)일 때만
+                        val recent = PowerSaver.stepsInLast(30_000)
+                        val walkingNow = recent < 0 || recent >= minOf(6, p.stepThreshold)
+                        if (walked >= p.stepThreshold && walkingNow) {
                             leaveWatching = false
+                            if (p.noteAutoAndCheckBrake()) {
+                                p.log("⚠ 30분 안에 자동 동작이 너무 많음 → 30분간 자동 잠금·열기 멈춤 (오작동 방지)")
+                                Notifier.info(applicationContext, "자동 잠금·열기가 반복돼서 30분간 멈췄어요")
+                                return@post
+                            }
                             p.log("${walked.toInt()}걸음 걸어서 멀어짐 → 바로 잠금")
                             Jobs.cancelLock(applicationContext)          // 예비 예약 취소
                             p.lastLeftAt = System.currentTimeMillis()

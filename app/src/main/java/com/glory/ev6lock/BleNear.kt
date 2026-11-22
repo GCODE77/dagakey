@@ -17,6 +17,18 @@ import android.os.ParcelUuid
 object BleNear {
     val CCC_DK: ParcelUuid = ParcelUuid.fromString("0000fff5-0000-1000-8000-00805f9b34fb")
 
+    /**
+     * 신호 세기 → 대략 거리(m). 전파 감쇠 공식: 거리 = 10^((1m 세기 - 세기) / (10·n)).
+     * n=2.5 (주차장·사람 몸·주머니를 고려한 실내 값). 오차 큼(±50%) — 표시·설정용 '대략' 값.
+     */
+    private const val N = 2.5
+    fun meters(rssi: Int, ref1m: Int): Double = Math.pow(10.0, (ref1m - rssi) / (10 * N))
+    fun rssiAt(m: Double, ref1m: Int): Int = (ref1m - 10 * N * Math.log10(m.coerceAtLeast(0.5))).toInt()
+    fun dist(p: Prefs, rssi: Int): String {
+        val m = meters(rssi, p.bleRef1m)
+        return "세기 $rssi, 약 ${if (m < 10) "%.1f".format(m) else m.toInt().toString()}m"
+    }
+
     private fun scanner(ctx: Context) = ctx.getSystemService(BluetoothManager::class.java).adapter?.bluetoothLeScanner
 
     private fun pi(ctx: Context) = PendingIntent.getBroadcast(
@@ -33,10 +45,13 @@ object BleNear {
     @SuppressLint("MissingPermission")
     fun start(ctx: Context, quiet: Boolean = false) {
         val p = Prefs(ctx)
-        if (p.inCar) return   // 차 안에서는 감시 안 함
+        if (!p.masterOn || !p.approachUnlock) { stop(ctx); return }   // 전체 꺼짐 / '다가가면 열기' 꺼짐
+        if (p.inCar) { stop(ctx); return }   // 차 안에서는 감시 안 함
         // 배터리 절약 ①: 집 와이파이에 연결돼 있으면 쉼 (집 안에 있으니 차에 다가갈 일 없음)
         if (p.atHome) { stop(ctx); if (!quiet) p.log("집 와이파이 연결 중 → 차 감시 쉼"); return }
-        stop(ctx)
+        // ★ 감시가 꺼져 있다가 새로 켜지는 경우만 시작 시각 기록 (20분 재시작·절전 전환은 이어지는 감시)
+        if (!p.scanOn) { p.scanStartAt = System.currentTimeMillis(); p.scanOn = true }
+        stopScan(ctx)
         // 배터리 절약 ②: 걷는 중이면 빠른 감시(균형), 오래 가만히 있으면 절전 감시
         val fast = !p.motionSave || p.bleActive
         val settings = ScanSettings.Builder()
@@ -51,7 +66,9 @@ object BleNear {
     }
 
     @SuppressLint("MissingPermission")
-    fun stop(ctx: Context) { try { scanner(ctx)?.stopScan(pi(ctx)) } catch (_: Exception) {} }
+    fun stop(ctx: Context) { stopScan(ctx); Prefs(ctx).scanOn = false }
+    @SuppressLint("MissingPermission")
+    private fun stopScan(ctx: Context) { try { scanner(ctx)?.stopScan(pi(ctx)) } catch (_: Exception) {} }
 
     /** 설정 화면용: 10초간 주변 신호 목록 수집 */
     @SuppressLint("MissingPermission")
@@ -84,7 +101,7 @@ class BleRefreshReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
         val p = Prefs(ctx)
         PowerSaver.checkIdle()
-        if (p.approachUnlock && !p.inCar) BleNear.start(ctx, quiet = true)
+        BleNear.start(ctx, quiet = true)
         schedule(ctx)
     }
     companion object {
@@ -105,16 +122,21 @@ class BleNearReceiver : BroadcastReceiver() {
         val p = Prefs(ctx)
         val best = results.maxOfOrNull { it.rssi } ?: return
         val now = System.currentTimeMillis()
-        // '멀리 갔었음' 판단: 신호가 20초 넘게 안 들렸거나(범위 밖) 아주 약하면(-95 미만)
-        val prevSeen = p.lastSeenAt
-        if (!p.farSinceLeave && (now - prevSeen > 20_000 || best < -95)) {
+        if (!p.masterOn || !p.approachUnlock) { BleNear.stop(ctx); return }
+        // '멀리 갔었음' 판단: 감시가 켜진 상태에서 60초 넘게 신호가 안 들렸거나, 아주 약하면(약 25m+)
+        // ★ 실측 버그: 잠근 직후 감시를 새로 켜면 '마지막으로 본 시각'이 오래전이라 바로 '멀어짐' → 2초 뒤 열림.
+        //   → 감시 시작 이후의 공백만 '멀리 갔음'으로 인정
+        val prevSeen = maxOf(p.lastSeenAt, p.scanStartAt)
+        val farRssi = BleNear.rssiAt(25.0, p.bleRef1m)
+        if (!p.farSinceLeave && (now - prevSeen > 60_000 || best < farRssi)) {
             p.farSinceLeave = true
-            p.log("차에서 충분히 멀어짐 확인 (다가오면 열기 준비)")
+            p.log("차에서 충분히 멀어짐 확인 (${BleNear.dist(p, best)}) → 다가오면 열기 준비")
         }
-        if (now - prevSeen > 5_000) p.lastSeenAt = now   // 기록은 5초에 한 번만
+        if (now - p.lastSeenAt > 5_000) p.lastSeenAt = now   // 기록은 5초에 한 번만
         if (best < p.bleRssi) return   // 아직 멀다
         // ★ 실측: 주행 중 차 신호가 세게 잡혀 '다가옴'으로 열기 실행 → 차 안이면 무시
         if (p.inCar) return
+        if (p.braked) return
         // ★ 실측: 떠난 지 2.5분 만에 돌아왔는데 '3분 무시' 규칙 때문에 안 열림
         //   → 시간 대신 '실제로 멀리 갔다가 돌아오는지'로 판단 (내리자마자 다시 열리는 것도 방지)
         if (!p.farSinceLeave && now - p.lastLeftAt < 15 * 60_000) return
@@ -123,11 +145,11 @@ class BleNearReceiver : BroadcastReceiver() {
         // ② 도착 단계: 멀리서(-90) 원격으로 연 뒤 30초 지나면 차가 스스로 다시 잠김
         //   → 차 바로 옆(-65 이상)에 도착하면 한 번 더 열기 (첫 감지 후 5분 안, 1회)
         if (sinceUnlock in 25_000..5 * 60_000) {
-            if (best >= -65 && !p.arrivedDone) {
+            if (best >= BleNear.rssiAt(2.0, p.bleRef1m) && !p.arrivedDone) {
                 p.arrivedDone = true
-                p.log("차 바로 옆 도착 (세기 $best) → 30초 자동잠금 대비 다시 열기")
+                p.log("차 바로 옆 도착 (${BleNear.dist(p, best)}) → 30초 자동잠금 대비 다시 열기")
                 BleNear.stop(ctx)
-                if (KiaAutoService.pendingAction != "unlock") Jobs.unlockNow(ctx)
+                if (KiaAutoService.pendingAction != "unlock") { KiaAutoService.dkOnly = !p.approachRemote; Jobs.unlockNow(ctx) }
             }
             return
         }
@@ -135,15 +157,29 @@ class BleNearReceiver : BroadcastReceiver() {
         // 방금 연 지 10분 안이면(도착 단계 끝난 뒤) 무시
         if (sinceUnlock < 10 * 60_000) return
 
-        // ① 첫 감지: 멀리서(-90) 다가옴 → 원격 먼저 열기 시작
-        p.log("차 신호 감지 (세기 $best) → 차에 다가옴, 열기 시작")
+        // ★ 실측: 교회 실내에서 가만히 있는데 신호가 들락날락해 열림/잠김 반복
+        //   → '지금 걸어서 다가오는 중'일 때만 열기 (최근 30초에 8걸음 이상)
+        val walking = PowerSaver.stepsInLast(30_000)
+        if (walking in 0..7) {
+            if (now - p.lastIgnoreLogAt > 5 * 60_000) {
+                p.lastIgnoreLogAt = now
+                p.log("차 신호 (${BleNear.dist(p, best)}) — 걷는 중이 아니라 열지 않음")
+            }
+            return
+        }
+
+        // ① 첫 감지: 설정 거리 안으로 걸어서 다가옴 → 열기 시작
+        p.log("차 신호 감지 (${BleNear.dist(p, best)}) · 걷는 중 → 차에 다가옴, 열기 시작")
+        if (p.noteAutoAndCheckBrake()) {
+            p.log("⚠ 30분 안에 자동 동작이 너무 많음 → 30분간 자동 잠금·열기 멈춤 (오작동 방지)")
+            Notifier.info(ctx, "자동 잠금·열기가 반복돼서 30분간 멈췄어요")
+            return
+        }
         KiaAutoService.instance?.stopLeaveWatch()   // 다가오는 걸음을 멀어짐으로 오인 방지
         p.lastUnlockAt = now
         p.arrivedDone = false
         // 감시는 끄지 않음: 바로 옆 도착(②)을 한 번 더 잡기 위해 계속 들음 (시동 켜면 자동 중지)
         Jobs.cancelLock(ctx)
-        if (p.approachUnlock) {
-            if (p.autoUnlock) Jobs.unlockNow(ctx) else Notifier.askUnlock(ctx)
-        }
+        if (p.autoUnlock) { KiaAutoService.dkOnly = !p.approachRemote; Jobs.unlockNow(ctx) } else Notifier.askUnlock(ctx)
     }
 }

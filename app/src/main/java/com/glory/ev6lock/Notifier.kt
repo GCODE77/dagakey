@@ -23,10 +23,18 @@ object Notifier {
         ctx, code, Intent(ctx, ActionReceiver::class.java).setAction(act), PendingIntent.FLAG_IMMUTABLE
     )
 
+    /** 알림 본문을 누르면 다가키 앱 화면 열기 */
+    private fun openApp(ctx: Context) = PendingIntent.getActivity(
+        ctx, 40, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
     private fun base(ctx: Context, text: String) = Notification.Builder(ctx, CH)
         .setSmallIcon(android.R.drawable.ic_lock_lock)
-        .setContentTitle("EV6")
+        .setContentTitle("다가키")
         .setContentText(text)
+        .setStyle(Notification.BigTextStyle().bigText(text))
+        .setContentIntent(openApp(ctx))
         .setAutoCancel(true)
 
     fun info(ctx: Context, text: String) = nm(ctx).notify(1, base(ctx, text).build())
@@ -76,6 +84,9 @@ object Notifier {
     fun askUnlockPhone(ctx: Context, what: String) = nm(ctx).notify(
         4, base(ctx, "폰 잠금을 풀면 바로 $what 합니다 (지문/얼굴)")
             .setContentTitle("다가키 — $what 대기 중")
+            .setContentIntent(PendingIntent.getActivity(ctx, 43,
+                Intent(ctx, WakeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
             .setTimeoutAfter(120_000)
             .build()
     )
@@ -84,8 +95,9 @@ object Notifier {
     fun persistent(ctx: Context) = nm(ctx).notify(
         3, Notification.Builder(ctx, CH_LOW)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentTitle("다가키")
-            .setContentText("차 근처에서 눌러 디지털키로 제어")
+            .setContentTitle(if (Prefs(ctx).masterOn) "다가키 · 자동 켜짐" else "다가키 · 자동 꺼짐")
+            .setContentText("차 근처에서 눌러 디지털키로 제어 · 누르면 앱 열기")
+            .setContentIntent(openApp(ctx))
             .setOngoing(true)
             .setShowWhen(false)
             .addAction(Notification.Action.Builder(null, "열기", action(ctx, "UNLOCK", 12)).build())

@@ -41,9 +41,16 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putLong("lastUnlock", v).apply()
 
     /** 이 세기 이상이면 "가까이 왔다" (차 옆 ≈ -50~-60, -80 ≈ 10m, -90 ≈ 20~30m) — 미리 열리도록 멀리서 감지 */
-    var bleRssi: Int
-        get() = sp.getInt("bleRssi3", -90)
-        set(v) = sp.edit().putInt("bleRssi3", v).apply()
+    /** 몇 m 앞에서 열기 시작할지 (사용자 설정). 실제 판단은 신호 세기로 환산해서 함 */
+    var unlockMeters: Int
+        get() = sp.getInt("unlockM", 8)
+        set(v) = sp.edit().putInt("unlockM", v).apply()
+    /** 차 바로 옆(약 1m)에서 잰 신호 세기 — '차 옆에서 신호 찾기'로 고를 때 자동 저장. 거리 환산 기준 */
+    var bleRef1m: Int
+        get() = sp.getInt("bleRef", -59)
+        set(v) = sp.edit().putInt("bleRef", v).apply()
+    /** 이 세기 이상이면 '다가옴' (unlockMeters를 세기로 환산) */
+    val bleRssi: Int get() = BleNear.rssiAt(unlockMeters.toDouble(), bleRef1m)
     // ── 업데이트 (GitHub 릴리스 확인) ──
     var autoUpdate: Boolean
         get() = sp.getBoolean("autoUpdate", true)
@@ -139,6 +146,41 @@ class Prefs(ctx: Context) {
     var autoRelock: Boolean
         get() = sp.getBoolean("autoRelock", false)
         set(v) = sp.edit().putBoolean("autoRelock", v).apply()
+
+    /** 전체 켜기/끄기 — 끄면 자동 잠금·열기·차 감시 모두 멈춤 (수동 버튼·위젯은 동작) */
+    var masterOn: Boolean
+        get() = sp.getBoolean("masterOn", true)
+        set(v) = sp.edit().putBoolean("masterOn", v).apply()
+    /** 자동 열기 때 디지털키가 안 붙어도 원격으로 열지 (기본 꺼짐: 멀리서 열리는 사고 방지) */
+    var approachRemote: Boolean
+        get() = sp.getBoolean("approachRemote", false)
+        set(v) = sp.edit().putBoolean("approachRemote", v).apply()
+    /** 차 감시(BLE 검색)가 켜진 시각 — 꺼져 있던 동안을 '신호 없음(멀리 감)'으로 오인하지 않기 위해 */
+    var scanOn: Boolean
+        get() = sp.getBoolean("scanOn", false)
+        set(v) = sp.edit().putBoolean("scanOn", v).apply()
+    var scanStartAt: Long
+        get() = sp.getLong("scanStartAt", 0)
+        set(v) = sp.edit().putLong("scanStartAt", v).apply()
+    /** 반복 방지 안전장치: 자동 동작 시각 기록, 이 시각까지 자동 동작 멈춤 */
+    var autoHist by str("autoHist")
+    var brakeUntil: Long
+        get() = sp.getLong("brakeUntil", 0)
+        set(v) = sp.edit().putLong("brakeUntil", v).apply()
+    /** 마지막 '걷는 중 아님' 무시 기록 시각 (기록 도배 방지) */
+    var lastIgnoreLogAt: Long
+        get() = sp.getLong("ignLog", 0)
+        set(v) = sp.edit().putLong("ignLog", v).apply()
+
+    /** 자동 동작(잠금/열기) 1회 기록 → 30분 안에 4번 넘으면 30분간 자동 멈춤. 멈춰야 하면 true */
+    fun noteAutoAndCheckBrake(): Boolean {
+        val now = System.currentTimeMillis()
+        val l = autoHist.split(",").mapNotNull { it.toLongOrNull() }.filter { now - it < 30 * 60_000 } + now
+        autoHist = l.joinToString(",")
+        if (l.size > 4) { brakeUntil = now + 30 * 60_000; autoHist = ""; return true }
+        return false
+    }
+    val braked get() = System.currentTimeMillis() < brakeUntil
 
     /** 접근 시 열기 */
     var approachUnlock: Boolean

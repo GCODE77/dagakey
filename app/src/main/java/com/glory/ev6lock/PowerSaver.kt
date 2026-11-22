@@ -38,8 +38,26 @@ object PowerSaver {
     // ── ② 움직임 ──
     private val sm by lazy { app.getSystemService(SensorManager::class.java) }
 
+    // ── '지금 걷는 중인지' (최근 걸음 시각 기록) ──
+    // ★ 실측: 교회 실내에서 가만히 있는데 차 신호가 들락날락 → 열기/잠금 반복.
+    //   자동 열기·잠금은 '지금 실제로 걷고 있을 때'만 하도록 판단 근거로 씀.
+    private val stepTimes = java.util.ArrayDeque<Long>()
+    @Volatile private var stepSensorOk = false
+    /** 최근 ms 동안 걸음 수. 걸음 센서를 못 쓰는 폰이면 -1 (판단 불가 → 막지 않음) */
+    fun stepsInLast(ms: Long): Int {
+        if (!stepSensorOk) return -1
+        val now = System.currentTimeMillis()
+        synchronized(stepTimes) {
+            while (stepTimes.isNotEmpty() && now - stepTimes.peekFirst()!! > 5 * 60_000) stepTimes.pollFirst()
+            return stepTimes.count { now - it <= ms }
+        }
+    }
+
     private val stepListener = object : SensorEventListener {
-        override fun onSensorChanged(e: SensorEvent) = moving("걸음")
+        override fun onSensorChanged(e: SensorEvent) {
+            synchronized(stepTimes) { stepTimes.addLast(System.currentTimeMillis()); if (stepTimes.size > 600) stepTimes.pollFirst() }
+            moving("걸음")
+        }
         override fun onAccuracyChanged(s: Sensor?, a: Int) {}
     }
 
@@ -52,7 +70,7 @@ object PowerSaver {
     }
 
     private fun watchMotion() {
-        try { sm.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)?.let { sm.registerListener(stepListener, it, SensorManager.SENSOR_DELAY_NORMAL) } } catch (_: Exception) {}
+        try { sm.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)?.let { stepSensorOk = sm.registerListener(stepListener, it, SensorManager.SENSOR_DELAY_NORMAL) } } catch (_: Exception) {}
         armSigMotion()
     }
 
