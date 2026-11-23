@@ -406,6 +406,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            val homeSug = remember(tick) { if (PowerSaver.homeList(p).isEmpty()) PowerSaver.suggestHome(p) else null }
+            if (homeSug != null) Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Card1)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("🔋 배터리 절약 추천", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Txt)
+                        Text("'${homeSug.first}'를 집 와이파이로 등록하면 집에서는 차 검색을 쉬어요", fontSize = 12.sp, color = Sub)
+                    }
+                    Button({ PowerSaver.addHome(p, homeSug.first); tick++ }, contentPadding = PaddingValues(horizontal = 14.dp)) { Text("등록") }
+                }
+            }
+
             Spacer(Modifier.weight(1f))
 
             // ── 최근 활동 ──
@@ -849,6 +860,44 @@ class MainActivity : ComponentActivity() {
 
             // ── 4. 배터리 절약 ──
             Section("배터리 절약", "집·회사 와이파이 ${PowerSaver.homeList(p).size}곳에서 감시 쉼", emoji = "🔋") {
+                // ── 오늘 차 검색 사용량 (앱이 직접 잰 검색 시간 + 대략 추정) ──
+                val usage = remember(live) {
+                    val now = System.currentTimeMillis()
+                    val today = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.KOREA).format(java.util.Date())
+                    var low = if (p.scanDay == today) p.scanLowMs else 0L
+                    var bal = if (p.scanDay == today) p.scanBalMs else 0L
+                    if (p.scanSince > 0) { val ms = (now - p.scanSince).coerceIn(0, 6 * 3600_000L); if (p.scanSinceBal) bal += ms else low += ms }
+                    Triple(low, bal, low / 3600_000.0 * 0.7 + bal / 3600_000.0 * 1.7)   // 저전력 약 0.7mA, 빠른 약 1.7mA 가정
+                }
+                fun hm(ms: Long) = "${ms / 3600_000}시간 ${ms / 60_000 % 60}분"
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card1).padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("🔋 오늘 차 검색 사용량", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Txt)
+                    Text("절전 검색 ${hm(usage.first)} · 빠른 검색 ${hm(usage.second)}", fontSize = 14.sp, color = Txt)
+                    Text("예상 사용량 약 ${"%.1f".format(usage.third)}mAh (배터리의 약 ${"%.2f".format(usage.third / 50.0)}%)", fontSize = 14.sp, color = Green, fontWeight = FontWeight.SemiBold)
+                    Text("검색 시간은 앱이 직접 잰 값이고, mAh는 기기마다 다른 대략 추정이에요. 정확한 값은 아래 '안드로이드 배터리 사용량'에서 확인하세요.", fontSize = 11.sp, color = Sub)
+                }
+                OutlinedButton({
+                    try { startActivity(Intent("android.intent.action.POWER_USAGE_SUMMARY")) }
+                    catch (_: Exception) { startActivity(Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)) }
+                }, Modifier.fillMaxWidth()) { Text("안드로이드 배터리 사용량 보기") }
+
+                // ── 집 와이파이 추천 (가장 크게 줄어드는 방법) ──
+                val sug = remember(live) { PowerSaver.suggestHome(p) }
+                if (sug != null) Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Blue.copy(alpha = 0.18f)).padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("💡 '${sug.first}'에 ${sug.second / 3600}시간 넘게 연결돼 있었어요", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Txt)
+                    Text("집 와이파이로 등록하면 집에 있는 동안 차 검색을 완전히 쉬어서 배터리가 가장 많이 절약돼요.", fontSize = 12.sp, color = Sub)
+                    Button({ PowerSaver.addHome(p, sug.first); Toast.makeText(ctx, "✓ '${sug.first}'를 집 와이파이로 등록했어요", Toast.LENGTH_SHORT).show() }) { Text("집 와이파이로 등록") }
+                }
+
+                var deep by remember { mutableStateOf(p.deepSave) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text("30분 넘게 가만히 있으면 검색 완전히 쉼", fontSize = 14.sp, color = Txt)
+                        Text("잠잘 때·책상 앞에서 절약. 움직이면(걸음·몸 움직임) 바로 다시 켜져요", fontSize = 12.sp, color = Sub)
+                    }
+                    OnOffSwitch(deep, { deep = it; p.deepSave = it; if (!it) { p.deepIdle = false; BleNear.start(ctx, quiet = true) }; p.log("깊은 절전 ${if (it) "켬" else "끔"}") })
+                }
                 var ms by remember { mutableStateOf(p.motionSave) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("5분간 가만히 있으면 절전 감시", fontSize = 14.sp, color = Txt, modifier = Modifier.weight(1f))
@@ -868,6 +917,8 @@ class MainActivity : ComponentActivity() {
                             verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(on, { toggle() })
                             Text(s, fontSize = 14.sp, color = Txt, modifier = Modifier.weight(1f))
+                            val secs = PowerSaver.wifiTotals(p).firstOrNull { it.first == s }?.second ?: 0L
+                            if (secs >= 3600) Text("${secs / 3600}시간", fontSize = 12.sp, color = Sub, modifier = Modifier.padding(end = 8.dp))
                             if (s == cur) Text("연결됨", fontSize = 12.sp, color = Green, modifier = Modifier.padding(end = 10.dp))
                         }
                     }

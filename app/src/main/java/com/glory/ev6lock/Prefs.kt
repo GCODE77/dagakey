@@ -124,6 +124,34 @@ class Prefs(ctx: Context) {
     var lastDkUnlockAt: Long
         get() = sp.getLong("lastDkUnlock", 0)
         set(v) = sp.edit().putLong("lastDkUnlock", v).apply()
+    // ── 배터리 절약 ──
+    /** 30분 넘게 가만히 있으면 차 검색을 완전히 쉼 (움직이면 바로 재개) */
+    var deepSave: Boolean
+        get() = sp.getBoolean("deepSave", true)
+        set(v) = sp.edit().putBoolean("deepSave", v).apply()
+    var deepIdle: Boolean
+        get() = sp.getBoolean("deepIdle", false)
+        set(v) = sp.edit().putBoolean("deepIdle", v).apply()
+    /** 와이파이별 누적 연결 시간 ("이름=초" 줄바꿈) + 지금 연결 중인 와이파이와 시작 시각 */
+    var wifiSecs by str("wifiSecs")
+    var wifiCur by str("wifiCur")
+    var wifiSince: Long
+        get() = sp.getLong("wifiSince", 0)
+        set(v) = sp.edit().putLong("wifiSince", v).apply()
+    /** 차 검색을 켜 둔 시간(오늘): 저전력/빠른 모드별 ms. 날짜가 바뀌면 초기화 */
+    var scanDay by str("scanDay")
+    var scanLowMs: Long
+        get() = sp.getLong("scanLowMs", 0)
+        set(v) = sp.edit().putLong("scanLowMs", v).apply()
+    var scanBalMs: Long
+        get() = sp.getLong("scanBalMs", 0)
+        set(v) = sp.edit().putLong("scanBalMs", v).apply()
+    var scanSince: Long
+        get() = sp.getLong("scanSince", 0)
+        set(v) = sp.edit().putLong("scanSince", v).apply()
+    var scanSinceBal: Boolean
+        get() = sp.getBoolean("scanSinceBal", false)
+        set(v) = sp.edit().putBoolean("scanSinceBal", v).apply()
     /** 트렁크를 누른 뒤 자동 잠금을 쉬는 시간(분). 0이면 쉬지 않음 */
     var trunkHoldMin: Int
         get() = sp.getInt("trunkHoldMin", 10)

@@ -122,6 +122,8 @@ object BleNear {
         if (p.inCar) { stop(ctx); return }   // 차 안에서는 감시 안 함
         // 배터리 절약 ①: 집 와이파이에 연결돼 있으면 쉼 (집 안에 있으니 차에 다가갈 일 없음)
         if (p.atHome) { stop(ctx); if (!quiet) p.log("집 와이파이 연결 중 → 차 감시 쉼"); return }
+        // 배터리 절약 ③: 30분 넘게 가만히 있어 '깊은 절전' 중이면 검색 안 함 (움직이면 PowerSaver가 해제하고 다시 켬)
+        if (p.deepIdle && !forLock) { stop(ctx); return }
         // ★ 감시가 꺼져 있다가 새로 켜지는 경우만 시작 시각 기록 (20분 재시작·절전 전환은 이어지는 감시)
         if (!p.scanOn) { p.scanStartAt = System.currentTimeMillis(); p.scanOn = true }
         stopScan(ctx)
@@ -134,14 +136,29 @@ object BleNear {
             .setNumOfMatches(ScanSettings.MATCH_NUM_ONE_ADVERTISEMENT)
             .setReportDelay(0)
             .build()
-        try { scanner(ctx)?.startScan(filters(p), settings, pi(ctx)); if (!quiet) p.log("차 접근 감시 시작 (${if (fast) "빠른" else "절전"} 감시)") }
+        try {
+            scanner(ctx)?.startScan(filters(p), settings, pi(ctx))
+            p.scanSince = System.currentTimeMillis(); p.scanSinceBal = fast   // 검색 시간 기록 시작 (배터리 사용 화면용)
+            if (!quiet) p.log("차 접근 감시 시작 (${if (fast) "빠른" else "절전"} 감시)")
+        }
         catch (e: Exception) { Prefs(ctx).log("BLE 감시 실패: ${e.message}") }
     }
 
     @SuppressLint("MissingPermission")
     fun stop(ctx: Context) { stopScan(ctx); Prefs(ctx).scanOn = false }
     @SuppressLint("MissingPermission")
-    private fun stopScan(ctx: Context) { try { scanner(ctx)?.stopScan(pi(ctx)) } catch (_: Exception) {} }
+    private fun stopScan(ctx: Context) {
+        try { scanner(ctx)?.stopScan(pi(ctx)) } catch (_: Exception) {}
+        // 켜 둔 시간을 오늘 기록에 더함 (날짜가 바뀌면 초기화)
+        val p = Prefs(ctx)
+        val today = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.KOREA).format(java.util.Date())
+        if (p.scanDay != today) { p.scanDay = today; p.scanLowMs = 0; p.scanBalMs = 0 }
+        if (p.scanSince > 0) {
+            val ms = (System.currentTimeMillis() - p.scanSince).coerceIn(0, 6 * 3600_000L)
+            if (p.scanSinceBal) p.scanBalMs += ms else p.scanLowMs += ms
+            p.scanSince = 0
+        }
+    }
 
     /** 설정 화면용: 10초간 주변 신호 목록 수집 */
     @SuppressLint("MissingPermission")

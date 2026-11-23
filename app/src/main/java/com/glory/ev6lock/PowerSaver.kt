@@ -26,6 +26,7 @@ object PowerSaver {
     @Volatile var currentSsid: String = ""
     private val h = Handler(Looper.getMainLooper())
     private const val IDLE_MS = 5 * 60_000L
+    private const val DEEP_MS = 30 * 60_000L
     private lateinit var app: Context
 
     fun start(ctx: Context) {
@@ -78,9 +79,11 @@ object PowerSaver {
         val p = Prefs(app)
         val now = System.currentTimeMillis()
         if (now - p.lastMoveAt > 10_000) p.lastMoveAt = now   // 기록은 10초에 한 번
-        if (p.motionSave && !p.bleActive) {
+        val wasDeep = p.deepIdle
+        if (wasDeep) p.deepIdle = false                        // 움직이면 깊은 절전 해제 → 아래에서 검색 재개
+        if (p.motionSave && (!p.bleActive || wasDeep)) {
             p.bleActive = true
-            p.log("$why 감지 → 빠른 차 감시로 전환")
+            p.log("$why 감지 → 빠른 차 감시로 전환" + if (wasDeep) " (깊은 절전 해제)" else "")
             if (p.approachUnlock && !p.inCar) BleNear.start(app, quiet = true)
         }
     }
@@ -97,6 +100,13 @@ object PowerSaver {
             p.log("5분간 움직임 없음 → 절전 차 감시로 전환")
             if (p.approachUnlock && !p.inCar) BleNear.start(app, quiet = true)
             armSigMotion()
+        }
+        // ★ 30분 넘게 가만히 있으면 검색을 완전히 쉼 (잠자는 동안·책상 앞 등). 걸음/움직임 센서는 계속 켜져 있어 움직이면 바로 재개
+        if (p.deepSave && p.motionSave && !p.bleActive && !p.deepIdle && !p.inCar && p.scanOn &&
+            System.currentTimeMillis() - p.lastMoveAt > DEEP_MS) {
+            p.deepIdle = true
+            BleNear.stop(app)
+            p.log("30분 넘게 가만히 있음 → 차 검색 완전히 쉼 (움직이면 바로 재개)")
         }
     }
 
@@ -142,11 +152,38 @@ object PowerSaver {
         try { cm.registerNetworkCallback(req, cb) } catch (_: Exception) {}
     }
 
+    // ── 와이파이별 누적 연결 시간 (집 와이파이 추천용) ──
+    private fun secsMap(p: Prefs): LinkedHashMap<String, Long> {
+        val m = LinkedHashMap<String, Long>()
+        p.wifiSecs.split("\n").forEach { l -> val i = l.lastIndexOf('='); if (i > 0) l.substring(i + 1).toLongOrNull()?.let { m[l.substring(0, i)] = it } }
+        return m
+    }
+    /** 지금까지 연결해 있던 와이파이의 시간을 누적에 반영 */
+    private fun closeCurrent(p: Prefs, now: Long) {
+        if (p.wifiCur.isNotEmpty() && p.wifiSince > 0) {
+            val m = secsMap(p)
+            m[p.wifiCur] = (m[p.wifiCur] ?: 0L) + ((now - p.wifiSince) / 1000).coerceAtLeast(0)
+            p.wifiSecs = m.entries.sortedByDescending { it.value }.take(20).joinToString("\n") { "${it.key}=${it.value}" }
+        }
+    }
+    /** 와이파이별 누적 시간(초) 내림차순 — 지금 연결 중인 것은 현재까지 포함 */
+    fun wifiTotals(p: Prefs): List<Pair<String, Long>> {
+        val m = secsMap(p)
+        if (p.wifiCur.isNotEmpty() && p.wifiSince > 0) m[p.wifiCur] = (m[p.wifiCur] ?: 0L) + ((System.currentTimeMillis() - p.wifiSince) / 1000)
+        return m.entries.sortedByDescending { it.value }.map { it.key to it.value }
+    }
+    /** 아직 집으로 등록 안 했고 4시간 이상 연결해 있던 가장 긴 와이파이 */
+    fun suggestHome(p: Prefs): Pair<String, Long>? {
+        val homes = homeList(p)
+        return wifiTotals(p).firstOrNull { it.first !in homes && it.second >= 4 * 3600 }
+    }
+
     private fun onWifi(c: NetworkCapabilities) {
         val ssid = (c.transportInfo as? WifiInfo)?.ssid?.trim('"') ?: return
         if (ssid.isBlank() || ssid == "<unknown ssid>") return
         currentSsid = ssid
         val p = Prefs(app)
+        if (p.wifiCur != ssid) { val now = System.currentTimeMillis(); closeCurrent(p, now); p.wifiCur = ssid; p.wifiSince = now }
         remember(p, ssid)
         val home = ssid in homeList(p)
         if (home != p.atHome) {
@@ -159,6 +196,7 @@ object PowerSaver {
     private fun onWifiLost() {
         currentSsid = ""
         val p = Prefs(app)
+        closeCurrent(p, System.currentTimeMillis()); p.wifiCur = ""; p.wifiSince = 0
         if (p.atHome) {
             p.atHome = false
             p.bleActive = true; p.lastMoveAt = System.currentTimeMillis()   // 집을 나서는 중 → 바로 빠른 감시
