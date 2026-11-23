@@ -372,9 +372,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
             // ── 주머니 속 실패가 최근 2주 안에 있었으면: '잠금 해제 유지' 안내 카드 ──
-            val pocketFail = remember(tick) { System.currentTimeMillis() - p.lastPocketFailAt < 14L * 24 * 3600_000 }
+            // '이미 켰어요'를 누른 뒤에 또 주머니 속 실패가 생겼을 때만 다시 보여줌 (켰는데도 계속 떠 있던 문제 해결)
+            val pocketFail = remember(tick) {
+                p.lastPocketFailAt > p.pocketDoneAt && System.currentTimeMillis() - p.lastPocketFailAt < 14L * 24 * 3600_000
+            }
             if (pocketFail) Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Card1)) {
-                CheckRow("주머니 속에서도 열리게 (잠금 해제 유지)", false, "눌러서 켜기") { openLockScreenSettings() }
+                Column(Modifier.fillMaxWidth()) {
+                    CheckRow("주머니 속에서도 열리게 (잠금 해제 유지)", false, "설정 열기") { openLockScreenSettings() }
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 10.dp), horizontalArrangement = Arrangement.End) {
+                        TextButton({ p.pocketDoneAt = System.currentTimeMillis(); tick++ }) { Text("이미 켰어요 (안내 숨기기)", color = Sub) }
+                    }
+                }
             }
 
             Spacer(Modifier.weight(1f))
@@ -670,10 +678,18 @@ class MainActivity : ComponentActivity() {
                 var remoteOn by remember { mutableStateOf(p.approachRemote) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("디지털키가 안 붙어도 원격으로 열기", fontSize = 14.sp, color = Txt)
-                        Text("끔(권장): 멀리서 열리는 일 없음", fontSize = 12.sp, color = Sub)
+                        Text("멀리서 감지됐을 때 원격으로도 열기", fontSize = 14.sp, color = Txt)
+                        Text("끔(권장): 처음 감지(약 ${metersNow}m)에서는 디지털키로만 열어요 — 멀리서 열리는 일 없음", fontSize = 12.sp, color = Sub)
                     }
-                    Switch(remoteOn, { remoteOn = it; p.approachRemote = it; p.log("자동 열기 원격 ${if (it) "허용" else "끔"}") })
+                    Switch(remoteOn, { remoteOn = it; p.approachRemote = it; p.log("멀리서 원격 열기 ${if (it) "허용" else "끔"}") })
+                }
+                var arrRemote by remember { mutableStateOf(p.arrivalRemote) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("차 바로 옆(약 2m)에서 안 열렸으면 원격으로도", fontSize = 14.sp, color = Txt)
+                        Text("켬(권장): 다가오다가 차 바로 옆에 왔는데 디지털키로 아직 못 열었으면, 그때 원격으로도 한 번 열어요", fontSize = 12.sp, color = Sub)
+                    }
+                    Switch(arrRemote, { arrRemote = it; p.arrivalRemote = it; p.log("도착 시 원격 보조 ${if (it) "켬" else "끔"}") })
                 }
             }
 
@@ -686,7 +702,16 @@ class MainActivity : ComponentActivity() {
                 Stepper("예비 확인 (실시간 감지를 놓쳤을 때)", p.lockDelayMin, "분", 1, 30, listOf(1, 2, 3, 5, 10, 15)) {
                     p.lockDelayMin = it; p.log("설정 저장: 예비 확인 ${it}분")
                 }
-                Text("가만히 있을 때 조금씩 움직인 걸음은 세지 않아요 (지금 걷는 중일 때만)", fontSize = 12.sp, color = Sub)
+                Stepper("이 거리 이상 멀어져야 잠금 (약)", p.lockMeters, "m", 3, 50, listOf(5, 8, 10, 15, 20, 30)) {
+                    p.lockMeters = it; p.log("설정 저장: 잠금 거리 약 ${it}m (세기 ${BleNear.rssiAt(it.toDouble(), p.bleRef1m)} 이하)")
+                }
+                val liveLock = remember(live) {
+                    val age = (System.currentTimeMillis() - p.lastRssiAt) / 1000
+                    if (p.lastRssiAt == 0L || age > 60) "지금 차 신호: 안 잡힘 (멀거나 감시 쉼)" else "지금 차 신호: ${BleNear.dist(p, p.lastRssi)} · ${age}초 전"
+                }
+                Text(liveLock, fontSize = 13.sp, color = Sub)
+                Text("걸음 수와 거리가 둘 다 넘어야 잠겨요. 차 주변(트렁크 등)을 돌아다녀도 안 잠기고, 트렁크 버튼을 누르면 10분간 쉬어요. " +
+                    "가만히 있을 때 조금씩 움직인 걸음은 세지 않아요.", fontSize = 12.sp, color = Sub)
                 var lockRemote by remember { mutableStateOf(p.leaveRemote) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {

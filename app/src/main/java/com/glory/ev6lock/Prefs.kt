@@ -112,6 +112,26 @@ class Prefs(ctx: Context) {
     var lastLockAt: Long
         get() = sp.getLong("lastLockAt", 0)
         set(v) = sp.edit().putLong("lastLockAt", v).apply()
+    /** 이 거리(약 m)보다 멀어져야 자동 잠금 (걸음 수만으론 차 주변을 돌아도 잠겨버림 → 신호 세기로 거리 확인) */
+    var lockMeters: Int
+        get() = sp.getInt("lockM", 8)
+        set(v) = sp.edit().putInt("lockM", v).apply()
+    /** 차 바로 옆(약 2m)에 왔는데도 디지털키로 안 열렸으면 원격으로도 열기 */
+    var arrivalRemote: Boolean
+        get() = sp.getBoolean("arrivalRemote", true)
+        set(v) = sp.edit().putBoolean("arrivalRemote", v).apply()
+    /** 마지막으로 '디지털키'로 열기 버튼을 누른 시각 */
+    var lastDkUnlockAt: Long
+        get() = sp.getLong("lastDkUnlock", 0)
+        set(v) = sp.edit().putLong("lastDkUnlock", v).apply()
+    /** 이 시각까지 자동 잠금 보류 (트렁크를 쓰는 중) */
+    var lockHoldUntil: Long
+        get() = sp.getLong("lockHold", 0)
+        set(v) = sp.edit().putLong("lockHold", v).apply()
+    /** '잠금 해제 유지 이미 켰어요'를 누른 시각 — 이후 또 실패했을 때만 안내 카드 다시 표시 */
+    var pocketDoneAt: Long
+        get() = sp.getLong("pocketDone", 0)
+        set(v) = sp.edit().putLong("pocketDone", v).apply()
     /** 폰 잠금 때문에 주머니 속에서 기아 앱을 못 띄운 마지막 시각 (안내 표시용) */
     var lastPocketFailAt: Long
         get() = sp.getLong("pocketFail", 0)
@@ -225,15 +245,29 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("demo", false)
         set(v) = sp.edit().putBoolean("demo", v).apply()
 
+    companion object {
+        @Volatile private var lastMsg = ""
+        @Volatile private var lastMsgAt = 0L
+    }
+
     fun log(msg: String) {
+        // ★ 실측: 같은 줄이 한 초에 여러 번 찍혀 기록이 금방 밀림 → 4초 안의 똑같은 줄은 한 번만
+        val nowMs = System.currentTimeMillis()
+        synchronized(Prefs::class.java) {
+            if (msg == lastMsg && nowMs - lastMsgAt < 4000) return
+            lastMsg = msg; lastMsgAt = nowMs
+        }
         val t = java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.KOREA).format(java.util.Date())
-        lastLog = ("$t $msg\n" + lastLog).take(4000)
-        // 진단용: 파일에도 남김 (USB로 통째로 꺼내 분석)
-        try {
-            val f = java.io.File(appCtx.filesDir, "app.log")
-            if (f.length() > 300_000) f.writeText("")
-            f.appendText("$t $msg\n")
-        } catch (_: Exception) {}
+        lastLog = ("$t $msg\n" + lastLog).take(12000)
+        // 진단용 파일: 앱 전용 폴더(내부) + USB로 꺼낼 수 있는 폴더(외부 /Android/data/…/files)
+        val line = "$t $msg\n"
+        for (dir in listOfNotNull(appCtx.filesDir, try { appCtx.getExternalFilesDir(null) } catch (_: Exception) { null })) {
+            try {
+                val f = java.io.File(dir, "app.log")
+                if (f.length() > 400_000) f.writeText(f.readText().takeLast(150_000))
+                f.appendText(line)
+            } catch (_: Exception) {}
+        }
         android.util.Log.d("Dagakey", msg)
     }
 

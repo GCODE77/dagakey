@@ -61,6 +61,8 @@ class DagaWidget : AppWidgetProvider() {
         fun tapped(ctx: Context, what: String) {
             Prefs(ctx).apply {
                 lastTap = what; lastTapAt = System.currentTimeMillis()
+                // ★ 실측: 트렁크를 쓰러 갔는데 자동으로 잠겨버림 → 트렁크를 누르면 10분간 자동 잠금 보류
+                if (what == "트렁크") { lockHoldUntil = System.currentTimeMillis() + 10 * 60_000; log("트렁크 사용 → 10분간 자동 잠금 보류") }
                 BleNear.calibrate(this, "직접 $what")   // 차 옆에서 누른 거라면 그때 세기로 거리 보정
             }
             val t = java.text.SimpleDateFormat("HH:mm", java.util.Locale.KOREA).format(java.util.Date())

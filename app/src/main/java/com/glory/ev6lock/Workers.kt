@@ -36,6 +36,20 @@ class LockWorker(ctx: Context, ps: WorkerParameters) : CoroutineWorker(ctx, ps) 
             }
         }
 
+        // ★ 실측: 걸음 수만으로 예비 잠금이 실행돼 트렁크 쪽에 있는데도 잠김 → 신호 세기로 정말 멀어졌는지 확인
+        if (!force) {
+            val elapsedMin2 = (System.currentTimeMillis() - p.parkedAt) / 60000
+            if (System.currentTimeMillis() < p.lockHoldUntil && elapsedMin2 < 40) {
+                p.log("트렁크 사용 중 — 예비 잠금 2분 뒤 재확인"); Jobs.scheduleLock(ctx, 2); return Result.success()
+            }
+            BleNear.start(ctx, quiet = true, forLock = true)
+            val (far, why) = BleNear.farForLock(p)
+            if (!far && elapsedMin2 < 40) {
+                p.log("아직 차 가까이 ($why) → 예비 잠금 2분 뒤 재확인"); Jobs.scheduleLock(ctx, 2); return Result.success()
+            }
+            KiaAutoService.dkOnly = !p.leaveRemote
+        }
+
         return try {
             val api = KiaApi.get(p)
             if (api.doorState() == DoorState.LOCKED) {
@@ -80,14 +94,13 @@ class UnlockWorker(ctx: Context, ps: WorkerParameters) : CoroutineWorker(ctx, ps
 }
 
 object Jobs {
-    private val net = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+    // ★ 인터넷 제약 없음: 지하주차장처럼 데이터가 안 터지는 곳에서도 디지털키로 바로 실행되어야 함
 
     fun scheduleLock(ctx: Context, delayMin: Int, force: Boolean = false) = WorkManager.getInstance(ctx).enqueueUniqueWork(
         "lock", ExistingWorkPolicy.REPLACE,
         OneTimeWorkRequestBuilder<LockWorker>()
             .setInitialDelay(delayMin.toLong(), TimeUnit.MINUTES)
             .setInputData(workDataOf("force" to force))
-            .setConstraints(net)
             .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
             .build()
     )
@@ -96,6 +109,6 @@ object Jobs {
 
     fun unlockNow(ctx: Context) = WorkManager.getInstance(ctx).enqueueUniqueWork(
         "unlock", ExistingWorkPolicy.KEEP,
-        OneTimeWorkRequestBuilder<UnlockWorker>().setConstraints(net).build()
+        OneTimeWorkRequestBuilder<UnlockWorker>().build()
     )
 }

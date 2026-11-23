@@ -29,8 +29,47 @@ object BleNear {
         return "세기 $rssi, 약 ${if (m < 10) "%.1f".format(m) else m.toInt().toString()}m"
     }
 
+    // ── 신호 세기 평활화 ──
+    // ★ 실측: 같은 초에 -93 → -72로 튀어 '멀어짐 확인'과 '다가옴'이 동시에 발생. 1회 값 대신 최근 값들의 중간값으로 판단
+    private val samples = java.util.ArrayDeque<Pair<Long, Int>>()
+    @Volatile var lastHeardAt = 0L
+    @Synchronized private fun addSample(rssi: Int) {
+        val now = System.currentTimeMillis()
+        samples.addLast(now to rssi); lastHeardAt = now
+        while (samples.isNotEmpty() && now - samples.first.first > 15_000) samples.pollFirst()
+    }
+    /** 최근 windowMs 안에 받은 신호의 중간값 (없으면 null) */
+    @Synchronized fun smooth(windowMs: Long = 8_000): Int? {
+        val now = System.currentTimeMillis()
+        val l = samples.filter { now - it.first <= windowMs }.map { it.second }.sorted()
+        return if (l.isEmpty()) null else l[l.size / 2]
+    }
+    /** 최근 windowMs 안에 기준(th) 이상인 신호가 몇 번 잡혔는지 */
+    @Synchronized fun countAtLeast(th: Int, windowMs: Long = 8_000): Int {
+        val now = System.currentTimeMillis()
+        return samples.count { now - it.first <= windowMs && it.second >= th }
+    }
+
+    /**
+     * 멀어짐 잠금용 거리 확인: 차에서 lockMeters 이상 멀어졌는가?
+     * ★ 실측: 걸음 수만 보면 트렁크 쪽을 돌아다녀도 '멀어짐'으로 보고 잠가버림.
+     * 반환: (잠가도 됨, 이유 글자)
+     */
+    fun farForLock(p: Prefs): Pair<Boolean, String> {
+        val now = System.currentTimeMillis()
+        val s = smooth(6_000)
+        if (s == null) {
+            // 차 신호가 안 들림: 감시를 켠 지 20초가 지났으면 '범위 밖(멀리)'으로 봄. 막 켠 직후엔 기다림
+            val waited = now - maxOf(p.scanStartAt, lastHeardAt)
+            return if (p.scanOn && waited < 20_000) false to "차 신호 확인 중" else true to "차 신호 안 들림(멀리)"
+        }
+        val th = rssiAt(p.lockMeters.toDouble(), p.bleRef1m)
+        return (s <= th) to dist(p, s)
+    }
+
     /** 차 신호를 받을 때마다 호출: 최근 세기·20초 최대값 기록 */
     fun remember(p: Prefs, rssi: Int) {
+        addSample(rssi)
         val now = System.currentTimeMillis()
         if (now - p.lastRssiAt > 1500 || rssi != p.lastRssi) { p.lastRssi = rssi; p.lastRssiAt = now }
         if (now - p.nearMaxAt > 20_000 || rssi >= p.nearMax) { p.nearMax = rssi; p.nearMaxAt = now }
@@ -54,7 +93,9 @@ object BleNear {
         val ref = (rssi + 10 * N * Math.log10(m)).toInt()
         val list = (p.calSamples.split(",").mapNotNull { it.toIntOrNull() } + ref).takeLast(7)
         p.calSamples = list.joinToString(",")
-        val med = list.sorted()[list.size / 2].coerceIn(-80, -40)
+        val s = list.sorted()
+        // 짝수 개면 가운데 두 값의 평균 (예전엔 큰 쪽만 골라 한쪽으로 쏠림)
+        val med = (if (s.size % 2 == 1) s[s.size / 2] else (s[s.size / 2 - 1] + s[s.size / 2]) / 2).coerceIn(-75, -40)
         val old = p.bleRef1m
         p.bleRef1m = med
         p.log("📏 거리 기록 ($why, 세기 $rssi ≈ ${m.toInt()}m) → 1m 기준 $old → $med (기록 ${list.size}개)")
@@ -74,9 +115,10 @@ object BleNear {
 
     /** 주차 후 감시 시작 (차에 다시 다가오는지) */
     @SuppressLint("MissingPermission")
-    fun start(ctx: Context, quiet: Boolean = false) {
+    fun start(ctx: Context, quiet: Boolean = false, forLock: Boolean = false) {
         val p = Prefs(ctx)
-        if (!p.masterOn || !p.approachUnlock) { stop(ctx); return }   // 전체 꺼짐 / '다가가면 열기' 꺼짐
+        // 전체 꺼짐 / '다가가면 열기' 꺼짐 (단, 잠금 거리 확인용 검색은 '열기'가 꺼져 있어도 켬)
+        if (!p.masterOn || (!p.approachUnlock && !(forLock && p.autoLock))) { stop(ctx); return }
         if (p.inCar) { stop(ctx); return }   // 차 안에서는 감시 안 함
         // 배터리 절약 ①: 집 와이파이에 연결돼 있으면 쉼 (집 안에 있으니 차에 다가갈 일 없음)
         if (p.atHome) { stop(ctx); if (!quiet) p.log("집 와이파이 연결 중 → 차 감시 쉼"); return }
@@ -153,19 +195,26 @@ class BleNearReceiver : BroadcastReceiver() {
         val p = Prefs(ctx)
         val best = results.maxOfOrNull { it.rssi } ?: return
         val now = System.currentTimeMillis()
-        BleNear.remember(p, best)
-        if (!p.masterOn || !p.approachUnlock) { BleNear.stop(ctx); return }
-        // '멀리 갔었음' 판단: 감시가 켜진 상태에서 60초 넘게 신호가 안 들렸거나, 아주 약하면(약 25m+)
+        BleNear.remember(p, best)                 // 신호 기록 (거리 표시·잠금 거리 확인·평활화)
+        if (!p.masterOn) { BleNear.stop(ctx); return }
+        if (!p.approachUnlock) return             // '다가가면 열기' 꺼짐 (이 검색은 잠금 거리 확인용으로만 씀)
+
+        // ★ 실측: 같은 초에 -93 → -72로 튐 → 1회 값이 아니라 최근 8초 값들의 '중간값'으로 판단
+        val sm = BleNear.smooth(8_000) ?: best
+
+        // '멀리 갔었음' 판단: 감시가 켜진 상태에서 60초 넘게 신호가 안 들렸거나, 중간값이 아주 약하면(약 25m+)
         // ★ 실측 버그: 잠근 직후 감시를 새로 켜면 '마지막으로 본 시각'이 오래전이라 바로 '멀어짐' → 2초 뒤 열림.
         //   → 감시 시작 이후의 공백만 '멀리 갔음'으로 인정
         val prevSeen = maxOf(p.lastSeenAt, p.scanStartAt)
         val farRssi = BleNear.rssiAt(25.0, p.bleRef1m)
-        if (!p.farSinceLeave && (now - prevSeen > 60_000 || best < farRssi)) {
+        if (!p.farSinceLeave && (now - prevSeen > 60_000 || sm < farRssi)) {
             p.farSinceLeave = true
-            p.log("차에서 충분히 멀어짐 확인 (${BleNear.dist(p, best)}) → 다가오면 열기 준비")
+            p.log("차에서 충분히 멀어짐 확인 (${BleNear.dist(p, sm)}) → 다가오면 열기 준비")
         }
         if (now - p.lastSeenAt > 5_000) p.lastSeenAt = now   // 기록은 5초에 한 번만
-        if (best < p.bleRssi) return   // 아직 멀다
+        if (sm < p.bleRssi) return   // 아직 멀다
+        // ★ 최소 2번 인식: 설정 거리 안 신호가 최근 8초에 2번 이상 잡혀야 '다가옴'
+        if (BleNear.countAtLeast(p.bleRssi, 8_000) < 2) return
         // ★ 실측: 주행 중 차 신호가 세게 잡혀 '다가옴'으로 열기 실행 → 차 안이면 무시
         if (p.inCar) return
         if (p.braked) return
@@ -174,20 +223,24 @@ class BleNearReceiver : BroadcastReceiver() {
         if (!p.farSinceLeave && now - p.lastLeftAt < 15 * 60_000) return
         val sinceUnlock = now - p.lastUnlockAt
 
-        // ② 도착 단계: 멀리서(-90) 원격으로 연 뒤 30초 지나면 차가 스스로 다시 잠김
-        //   → 차 바로 옆(-65 이상)에 도착하면 한 번 더 열기 (첫 감지 후 5분 안, 1회)
-        if (sinceUnlock in 25_000..5 * 60_000) {
-            if (best >= BleNear.rssiAt(2.0, p.bleRef1m) && !p.arrivedDone) {
+        // ② 도착 단계: 멀리서 먼저 연 뒤 30초 지나면 차가 스스로 다시 잠김
+        //   → 차 바로 옆(약 2m)에 도착하면 한 번 더 열기 (첫 감지 후 10분 안, 1회)
+        //   ★ 이때까지 디지털키로 못 열었다면(연결 안 됨 등) 원격으로도 열기
+        if (sinceUnlock in 25_000..10 * 60_000) {
+            val arr = BleNear.rssiAt(2.0, p.bleRef1m)
+            if (sm >= arr && !p.arrivedDone && BleNear.countAtLeast(arr, 6_000) >= 2) {
                 p.arrivedDone = true
-                p.log("차 바로 옆 도착 (${BleNear.dist(p, best)}) → 30초 자동잠금 대비 다시 열기")
+                val dkDone = p.lastDkUnlockAt >= p.lastUnlockAt   // 이번 접근에서 디지털키로 이미 열었는지
+                val remote = !dkDone && p.arrivalRemote
+                p.log("차 바로 옆 도착 (${BleNear.dist(p, sm)}) → " +
+                    if (dkDone) "30초 자동잠금 대비 디지털키로 다시 열기"
+                    else if (remote) "디지털키로 아직 못 열어서 원격으로도 열기" else "다시 열기")
                 BleNear.stop(ctx)
-                if (KiaAutoService.pendingAction != "unlock") { KiaAutoService.dkOnly = !p.approachRemote; Jobs.unlockNow(ctx) }
+                if (KiaAutoService.pendingAction != "unlock") { KiaAutoService.dkOnly = !remote; Jobs.unlockNow(ctx) }
             }
             return
         }
         if (sinceUnlock < 25_000) return
-        // 방금 연 지 10분 안이면(도착 단계 끝난 뒤) 무시
-        if (sinceUnlock < 10 * 60_000) return
 
         // ★ 실측: 교회 실내에서 가만히 있는데 신호가 들락날락해 열림/잠김 반복
         //   → '지금 걸어서 다가오는 중'일 때만 열기 (최근 30초에 8걸음 이상)
@@ -195,13 +248,13 @@ class BleNearReceiver : BroadcastReceiver() {
         if (walking in 0..7) {
             if (now - p.lastIgnoreLogAt > 5 * 60_000) {
                 p.lastIgnoreLogAt = now
-                p.log("차 신호 (${BleNear.dist(p, best)}) — 걷는 중이 아니라 열지 않음")
+                p.log("차 신호 (${BleNear.dist(p, sm)}) — 걷는 중이 아니라 열지 않음")
             }
             return
         }
 
         // ① 첫 감지: 설정 거리 안으로 걸어서 다가옴 → 열기 시작
-        p.log("차 신호 감지 (${BleNear.dist(p, best)}) · 걷는 중 → 차에 다가옴, 열기 시작")
+        p.log("차 신호 감지 (${BleNear.dist(p, sm)}) · 걷는 중 → 차에 다가옴, 열기 시작")
         if (p.noteAutoAndCheckBrake()) {
             p.log("⚠ 30분 안에 자동 동작이 너무 많음 → 30분간 자동 잠금·열기 멈춤 (오작동 방지)")
             Notifier.info(ctx, "자동 잠금·열기가 반복돼서 30분간 멈췄어요")

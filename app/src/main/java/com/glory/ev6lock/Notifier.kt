@@ -9,13 +9,18 @@ import android.content.Context
 import android.content.Intent
 
 object Notifier {
-    private const val CH = "ev6"          // 알림(소리)
-    private const val CH_LOW = "ev6_bar"  // 상단 고정 바(조용)
+    private const val CH = "ev6"            // 꼭 눌러야 하는 알림(설치 확인·문 열기 묻기) — 팝업
+    private const val CH_LOW = "ev6_bar"    // 상단 고정 바(조용)
+    private const val CH_Q = "ev6_quiet"    // 처리 결과·안내 — 소리·팝업 없이 조용히 (곧 사라짐)
+    private const val CH_UPD = "ev6_upd"    // 새 버전 — 소리 없이 상단에만
 
     private fun nm(ctx: Context): NotificationManager {
         val m = ctx.getSystemService(NotificationManager::class.java)
-        m.createNotificationChannel(NotificationChannel(CH, "차량 알림", NotificationManager.IMPORTANCE_HIGH))
+        // ★ 실측: 모든 알림이 '팝업(헤드업)'으로 계속 떠서 화면을 가림 → 결과·안내는 조용한 채널로
+        m.createNotificationChannel(NotificationChannel(CH, "확인이 필요한 알림", NotificationManager.IMPORTANCE_HIGH))
         m.createNotificationChannel(NotificationChannel(CH_LOW, "빠른 제어 바", NotificationManager.IMPORTANCE_LOW))
+        m.createNotificationChannel(NotificationChannel(CH_Q, "처리 결과·안내 (조용히)", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
+        m.createNotificationChannel(NotificationChannel(CH_UPD, "새 버전 알림", NotificationManager.IMPORTANCE_DEFAULT).apply { setSound(null, null); enableVibration(false) })
         return m
     }
 
@@ -29,15 +34,17 @@ object Notifier {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
 
-    private fun base(ctx: Context, text: String) = Notification.Builder(ctx, CH)
+    private fun base(ctx: Context, text: String, ch: String = CH_Q) = Notification.Builder(ctx, ch)
         .setSmallIcon(android.R.drawable.ic_lock_lock)
         .setContentTitle("다가키")
         .setContentText(text)
         .setStyle(Notification.BigTextStyle().bigText(text))
         .setContentIntent(openApp(ctx))
         .setAutoCancel(true)
+        .setOnlyAlertOnce(true)
 
-    fun info(ctx: Context, text: String) = nm(ctx).notify(1, base(ctx, text).build())
+    /** 처리 결과 알림: 조용히 뜨고 10초 뒤 저절로 사라짐 */
+    fun info(ctx: Context, text: String) = nm(ctx).notify(1, base(ctx, text).setTimeoutAfter(10_000).build())
 
     /** 새 버전 알림: 누르거나 '업데이트'를 누르면 앱이 열리며 바로 다운로드 시작 */
     fun updateAvailable(ctx: Context, tag: String) {
@@ -46,7 +53,7 @@ object Notifier {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         nm(ctx).notify(
-            5, Notification.Builder(ctx, CH)
+            5, Notification.Builder(ctx, CH_UPD)
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
                 .setContentTitle("다가키 새 버전 $tag")
                 .setContentText("눌러서 업데이트 (다운로드 후 바로 설치)")
@@ -75,7 +82,7 @@ object Notifier {
     )
 
     fun askUnlock(ctx: Context) = nm(ctx).notify(
-        2, base(ctx, "차 근처에 도착했습니다. 문을 열까요?")
+        2, base(ctx, "차 근처에 도착했습니다. 문을 열까요?", CH)
             .addAction(Notification.Action.Builder(null, "문 열기", action(ctx, "UNLOCK", 12)).build())
             .build()
     )
@@ -87,7 +94,7 @@ object Notifier {
             .setContentIntent(PendingIntent.getActivity(ctx, 43,
                 Intent(ctx, WakeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-            .setTimeoutAfter(120_000)
+            .setTimeoutAfter(60_000)
             .build()
     )
 
@@ -97,7 +104,7 @@ object Notifier {
             Intent("android.settings.LOCK_SCREEN_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val t = "폰이 잠겨 있어 주머니 속에서 열지 못했어요.\n설정 → 잠금화면 및 AOD → 잠금 해제 유지 → '몸에 지니고 있을 때'를 켜면 주머니 속에서도 열려요. (눌러서 설정 열기)"
-        nm(ctx).notify(7, Notification.Builder(ctx, CH)
+        nm(ctx).notify(7, Notification.Builder(ctx, CH_Q)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentTitle("주머니 속에서도 열리게 하기")
             .setContentText("눌러서 '잠금 해제 유지' 켜기")

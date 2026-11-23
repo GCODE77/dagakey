@@ -122,7 +122,7 @@ class KiaAutoService : AccessibilityService() {
         if (isControl()) ensureTicker()
     }
 
-    private fun done() { pendingAction = ""; dkOnly = false; actionStart = 0L; ticking = false; waitingUnlock = false; pressed = false; launchedAt = 0L; homeTries = 0; remoteSent = false; backDone = false; deferred = false; diagDone = false; dkTaps = 0; dkTapAt = 0L }
+    private fun done() { pendingAction = ""; dkOnly = false; relaunch = 0; actionStart = 0L; ticking = false; waitingUnlock = false; pressed = false; launchedAt = 0L; homeTries = 0; remoteSent = false; backDone = false; deferred = false; diagDone = false; dkTaps = 0; dkTapAt = 0L }
 
     @Suppress("DEPRECATION")
     private fun wakeScreen() {
@@ -137,7 +137,7 @@ class KiaAutoService : AccessibilityService() {
     /** 자동 동작 시작: 화면을 켜고(징검다리 화면) 잠겨 있으면 해제를 요청 → 풀리면 기아 앱 */
     fun kick() {
         if (pendingAction.isBlank()) return
-        actionStart = 0L; swipedBack = 0; pressed = false; homeTries = 0; remoteSent = false; dkTaps = 0; dkTapAt = 0L
+        actionStart = 0L; swipedBack = 0; pressed = false; homeTries = 0; remoteSent = false; dkTaps = 0; dkTapAt = 0L; relaunch = 0
         wakeScreen()
         val km = getSystemService(KeyguardManager::class.java)
         if (km.isKeyguardLocked) {
@@ -163,6 +163,7 @@ class KiaAutoService : AccessibilityService() {
     }
     private var launchedAt = 0L
     private var homeTries = 0
+    private var relaunch = 0
 
     private fun launchKia() {
         p.log("기아 앱 실행 → ${actionName()}")
@@ -254,6 +255,15 @@ class KiaAutoService : AccessibilityService() {
                 if (launchedAt == 0L) launchedAt = System.currentTimeMillis()
                 val waited = System.currentTimeMillis() - launchedAt
                 if (waited in 5_000..6_500) diagnoseScreen()
+                // ★ 실측: 화면이 켜져 있는데 기아 앱이 안 뜨고 30초 뒤 포기(주머니 대기)로 넘어감
+                //   → 10초 지나도 안 보이면 두 번까지 다시 실행해 봄
+                if (waited >= 10_000 && relaunch < 2 && pendingAction != "trunk") {
+                    relaunch++
+                    p.log("기아 앱이 안 떠서 다시 실행 ($relaunch/2)")
+                    try { startActivity(Intent(this, WakeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    catch (_: Exception) { launchKia() }
+                    return
+                }
                 if (waited > 30_000) {
                     if (pendingAction == "trunk") {
                         p.log("기아 앱 화면이 30초간 안 보임 — 트렁크 중단")
@@ -355,7 +365,7 @@ class KiaAutoService : AccessibilityService() {
                 return
             }
             val ok = clickOrTap(n)
-            if (ok) pressed = true
+            if (ok) { pressed = true; p.lastDkUnlockAt = System.currentTimeMillis() }   // 도착 단계에서 원격 보조 여부 판단용
             p.log("② 디지털키로 열기 누름 (${if (ok) "성공" else "실패"})${if (remoteSent) " — 원격도 이미 보냄" else ""}")
             if (ok) h.postDelayed({
                 if (pendingAction == "unlock") { p.log("열기 완료"); Notifier.info(applicationContext, "문을 열었습니다 [디지털키]"); done() }
@@ -490,6 +500,7 @@ class KiaAutoService : AccessibilityService() {
      * (예전: 무조건 2분 기다린 뒤 확인 → 늦게 잠김)
      */
     private var leaveWatching = false
+    @Volatile private var testNoDist = false
     fun startLeaveWatch() {
         if (leaveWatching) return
         if (!p.masterOn || !p.autoLock) return
@@ -499,14 +510,17 @@ class KiaAutoService : AccessibilityService() {
         if (System.currentTimeMillis() - p.lastLockAt < 15 * 60_000) { p.log("이미 잠금 완료 — 멀어짐 감시 생략"); return }
         leaveWatching = true
         val startAt = System.currentTimeMillis()
-        p.log("하차 감지 → 걸어서 멀어지면 바로 잠금 (실시간 감시)")
+        p.log("하차 감지 → 걸어서 ${p.lockMeters}m 이상 멀어지면 바로 잠금 (실시간 감시)")
+        // ★ 거리 확인을 위해 차 신호 검색을 바로 켬 (걸음 수만으로 잠그면 트렁크 쪽을 돌 때도 잠김)
+        BleNear.start(applicationContext, quiet = true, forLock = true)
+        var lastWaitLog = 0L
         val loop = object : Runnable {
             override fun run() {
                 val self = this
                 if (!leaveWatching) return
                 if (p.inCar) { p.log("다시 탑승 → 잠금 감시 중단"); leaveWatching = false; return }
                 // 10분 안에 안 떠났으면 감시 종료 (오래 남아 있다가 나중에 '다가오는 걸음'을 오인하는 것 방지)
-                if (System.currentTimeMillis() - startAt > 10 * 60_000) { p.log("10분간 안 멀어짐 → 멀어짐 감시 종료"); leaveWatching = false; return }
+                if (System.currentTimeMillis() - startAt > 20 * 60_000) { p.log("20분간 안 멀어짐 → 멀어짐 감시 종료 (예비 잠금이 이어서 확인)"); leaveWatching = false; return }
                 kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
                     val now = Steps.current(applicationContext)
                     val walked = if (now != null && p.stepsAtPark >= 0) now - p.stepsAtPark else 0f
@@ -517,13 +531,26 @@ class KiaAutoService : AccessibilityService() {
                         val recent = PowerSaver.stepsInLast(30_000)
                         val walkingNow = recent < 0 || recent >= minOf(6, p.stepThreshold)
                         if (walked >= p.stepThreshold && walkingNow) {
+                            // ★ 트렁크를 쓰는 중이면 잠그지 않고 계속 기다림
+                            val nowMs = System.currentTimeMillis()
+                            if (nowMs < p.lockHoldUntil) {
+                                if (nowMs - lastWaitLog > 60_000) { lastWaitLog = nowMs; p.log("트렁크 사용 중 — 자동 잠금 보류") }
+                                h.postDelayed(self, 4000); return@post
+                            }
+                            // ★ 걸음 수만으로는 차 주변을 돌아도 '멀어짐'이 됨 → 신호 세기로 정말 멀어졌는지 확인
+                            val (far, why) = if (testNoDist) true to "테스트" else BleNear.farForLock(p)
+                            if (!far) {
+                                if (nowMs - lastWaitLog > 30_000) { lastWaitLog = nowMs; p.log("${walked.toInt()}걸음 걸었지만 아직 차 가까이 ($why) → ${p.lockMeters}m 이상 멀어질 때까지 기다림") }
+                                h.postDelayed(self, 4000); return@post
+                            }
+                            testNoDist = false
                             leaveWatching = false
                             if (p.noteAutoAndCheckBrake()) {
                                 p.log("⚠ 30분 안에 자동 동작이 너무 많음 → 30분간 자동 잠금·열기 멈춤 (오작동 방지)")
                                 Notifier.info(applicationContext, "자동 잠금·열기가 반복돼서 30분간 멈췄어요")
                                 return@post
                             }
-                            p.log("${walked.toInt()}걸음 걸어서 멀어짐 → 바로 잠금")
+                            p.log("${walked.toInt()}걸음 · 거리 확인 완료 → 바로 잠금")
                             Jobs.cancelLock(applicationContext)          // 예비 예약 취소
                             p.lastLeftAt = System.currentTimeMillis()
                             dkOnly = !p.leaveRemote
@@ -543,6 +570,7 @@ class KiaAutoService : AccessibilityService() {
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
             val now = Steps.current(applicationContext) ?: run { p.log("테스트 실패: 걸음 센서 응답 없음"); return@launch }
             p.stepsAtPark = now - p.stepThreshold
+            testNoDist = true   // 테스트는 거리 확인 건너뜀
             p.log("── 멀어짐 잠금 테스트 (가상으로 ${p.stepThreshold}걸음 걸은 상태) ──")
             h.post { startLeaveWatch() }
         }
