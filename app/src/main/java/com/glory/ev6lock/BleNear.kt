@@ -254,12 +254,12 @@ class BleNearReceiver : BroadcastReceiver() {
         //   → 차 바로 옆(약 2m)에 도착하면 한 번 더 열기 (첫 감지 후 10분 안, 1회)
         //   ★ 이때까지 디지털키로 못 열었다면(연결 안 됨 등) 원격으로도 열기
         if (sinceUnlock in 25_000..10 * 60_000) {
-            val arr = BleNear.rssiAt(2.0, p.bleRef1m)
+            val arr = BleNear.rssiAt(p.arrivalMeters.toDouble(), p.bleRef1m)
             if (sm >= arr && !p.arrivedDone && BleNear.countAtLeast(arr, 6_000) >= 2) {
                 p.arrivedDone = true
                 val dkDone = p.lastDkUnlockAt >= p.lastUnlockAt   // 이번 접근에서 디지털키로 이미 열었는지
                 val remote = !dkDone && p.arrivalRemote
-                p.log("차 바로 옆 도착 (${BleNear.dist(p, sm)}) → " +
+                p.log("차 바로 옆 도착 (${BleNear.dist(p, sm)}, 기준 ${p.arrivalMeters}m) → " +
                     if (dkDone) "30초 자동잠금 대비 디지털키로 다시 열기"
                     else if (remote) "디지털키로 아직 못 열어서 원격으로도 열기" else "다시 열기")
                 BleNear.stop(ctx)
@@ -272,7 +272,7 @@ class BleNearReceiver : BroadcastReceiver() {
         // ★ 실측: 교회 실내에서 가만히 있는데 신호가 들락날락해 열림/잠김 반복
         //   → '지금 걸어서 다가오는 중'일 때만 열기 (최근 30초에 8걸음 이상)
         val walking = PowerSaver.stepsInLast(30_000)
-        if (walking in 0..7) {
+        if (walking >= 0 && walking < p.walkSteps) {
             if (now - p.lastIgnoreLogAt > 5 * 60_000) {
                 p.lastIgnoreLogAt = now
                 p.log("차 신호 (${BleNear.dist(p, sm)}) — 걷는 중이 아니라 열지 않음")

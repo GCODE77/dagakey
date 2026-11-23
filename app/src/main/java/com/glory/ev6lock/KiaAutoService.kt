@@ -520,7 +520,7 @@ class KiaAutoService : AccessibilityService() {
                 if (!leaveWatching) return
                 if (p.inCar) { p.log("다시 탑승 → 잠금 감시 중단"); leaveWatching = false; return }
                 // 10분 안에 안 떠났으면 감시 종료 (오래 남아 있다가 나중에 '다가오는 걸음'을 오인하는 것 방지)
-                if (System.currentTimeMillis() - startAt > 20 * 60_000) { p.log("20분간 안 멀어짐 → 멀어짐 감시 종료 (예비 잠금이 이어서 확인)"); leaveWatching = false; return }
+                if (System.currentTimeMillis() - startAt > p.leaveWatchMin * 60_000L) { p.log("${p.leaveWatchMin}분간 안 멀어짐 → 멀어짐 감시 종료 (예비 잠금이 이어서 확인)"); leaveWatching = false; return }
                 kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
                     val now = Steps.current(applicationContext)
                     val walked = if (now != null && p.stepsAtPark >= 0) now - p.stepsAtPark else 0f
@@ -529,7 +529,7 @@ class KiaAutoService : AccessibilityService() {
                         // ★ 실측: 실내에서 조금씩 움직인 걸음이 10분 동안 쌓여 '멀어짐'으로 잠김
                         //   → 누적 걸음 + '지금 걷는 중'(최근 30초에 6걸음 이상)일 때만
                         val recent = PowerSaver.stepsInLast(30_000)
-                        val walkingNow = recent < 0 || recent >= minOf(6, p.stepThreshold)
+                        val walkingNow = recent < 0 || recent >= minOf(p.walkSteps, p.stepThreshold)
                         if (walked >= p.stepThreshold && walkingNow) {
                             // ★ 트렁크를 쓰는 중이면 잠그지 않고 계속 기다림
                             val nowMs = System.currentTimeMillis()

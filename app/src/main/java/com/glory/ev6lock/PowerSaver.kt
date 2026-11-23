@@ -95,18 +95,18 @@ object PowerSaver {
     fun checkIdle() {
         if (!::app.isInitialized) return
         val p = Prefs(app)
-        if (p.motionSave && p.bleActive && System.currentTimeMillis() - p.lastMoveAt > IDLE_MS) {
+        if (p.motionSave && p.bleActive && System.currentTimeMillis() - p.lastMoveAt > p.idleMin * 60_000L) {
             p.bleActive = false
-            p.log("5분간 움직임 없음 → 절전 차 감시로 전환")
+            p.log("${p.idleMin}분간 움직임 없음 → 절전 차 감시로 전환")
             if (p.approachUnlock && !p.inCar) BleNear.start(app, quiet = true)
             armSigMotion()
         }
         // ★ 30분 넘게 가만히 있으면 검색을 완전히 쉼 (잠자는 동안·책상 앞 등). 걸음/움직임 센서는 계속 켜져 있어 움직이면 바로 재개
         if (p.deepSave && p.motionSave && !p.bleActive && !p.deepIdle && !p.inCar && p.scanOn &&
-            System.currentTimeMillis() - p.lastMoveAt > DEEP_MS) {
+            System.currentTimeMillis() - p.lastMoveAt > p.deepMin * 60_000L) {
             p.deepIdle = true
             BleNear.stop(app)
-            p.log("30분 넘게 가만히 있음 → 차 검색 완전히 쉼 (움직이면 바로 재개)")
+            p.log("${p.deepMin}분 넘게 가만히 있음 → 차 검색 완전히 쉼 (움직이면 바로 재개)")
         }
     }
 
@@ -172,10 +172,10 @@ object PowerSaver {
         if (p.wifiCur.isNotEmpty() && p.wifiSince > 0) m[p.wifiCur] = (m[p.wifiCur] ?: 0L) + ((System.currentTimeMillis() - p.wifiSince) / 1000)
         return m.entries.sortedByDescending { it.value }.map { it.key to it.value }
     }
-    /** 아직 집으로 등록 안 했고 4시간 이상 연결해 있던 가장 긴 와이파이 */
+    /** 아직 집으로 등록 안 했고, 설정한 시간(기본 30분) 이상 연결해 있던 가장 긴 와이파이 */
     fun suggestHome(p: Prefs): Pair<String, Long>? {
         val homes = homeList(p)
-        return wifiTotals(p).firstOrNull { it.first !in homes && it.second >= 4 * 3600 }
+        return wifiTotals(p).firstOrNull { it.first !in homes && it.second >= p.suggestMin * 60L }
     }
 
     private fun onWifi(c: NetworkCapabilities) {

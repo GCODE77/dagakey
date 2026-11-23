@@ -760,6 +760,13 @@ class MainActivity : ComponentActivity() {
                     }
                     OnOffSwitch(arrRemote, { arrRemote = it; p.arrivalRemote = it; p.log("도착 시 원격 보조 ${if (it) "켬" else "끔"}") })
                 }
+                Stepper("'차 바로 옆'으로 보는 거리 (약)", p.arrivalMeters, "m", 1, 10, listOf(1, 2, 3, 4, 5, 8)) {
+                    p.arrivalMeters = it; p.log("설정 저장: 차 바로 옆 거리 약 ${it}m")
+                }
+                Stepper("'걷는 중'으로 보는 걸음 (최근 30초)", p.walkSteps, "걸음", 3, 40, listOf(3, 5, 8, 10, 15, 20)) {
+                    p.walkSteps = it; p.log("설정 저장: 걷는 중 판단 30초에 ${it}걸음")
+                }
+                Text("가만히 있을 때 신호가 흔들려 잘못 열리는 걸 막아요. 숫자를 크게 하면 더 확실히 걸을 때만 열려요.", fontSize = 12.sp, color = Sub)
             }
 
             // ── 2. 멀어지면 잠금 ──
@@ -787,6 +794,12 @@ class MainActivity : ComponentActivity() {
                 }
                 Text(if (holdNow == 0) "0분: 트렁크를 써도 멀어지면(걸음+거리) 바로 잠겨요"
                      else "트렁크 버튼을 누르면 ${holdNow}분 동안은 멀어져도 잠그지 않아요", fontSize = 12.sp, color = Sub)
+                Stepper("내린 뒤 멀어짐을 지켜보는 최대 시간", p.leaveWatchMin, "분", 5, 120, listOf(10, 15, 20, 30, 60)) {
+                    p.leaveWatchMin = it; p.log("설정 저장: 멀어짐 감시 최대 ${it}분")
+                }
+                Stepper("반복 안전장치: 30분에 이 횟수 넘으면 멈춤", p.brakeCount, "회", 2, 20, listOf(2, 3, 4, 6, 8, 10)) {
+                    p.brakeCount = it; p.log("설정 저장: 반복 안전장치 ${it}회")
+                }
                 var lockRemote by remember { mutableStateOf(p.leaveRemote) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -885,7 +898,7 @@ class MainActivity : ComponentActivity() {
                 val sug = remember(live) { PowerSaver.suggestHome(p) }
                 if (sug != null) Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Blue.copy(alpha = 0.18f)).padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("💡 '${sug.first}'에 ${sug.second / 3600}시간 넘게 연결돼 있었어요", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Txt)
+                    Text("💡 '${sug.first}'에 ${if (sug.second >= 3600) "${sug.second / 3600}시간 ${sug.second / 60 % 60}분" else "${sug.second / 60}분"} 연결돼 있었어요", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Txt)
                     Text("집 와이파이로 등록하면 집에 있는 동안 차 검색을 완전히 쉬어서 배터리가 가장 많이 절약돼요.", fontSize = 12.sp, color = Sub)
                     Button({ PowerSaver.addHome(p, sug.first); Toast.makeText(ctx, "✓ '${sug.first}'를 집 와이파이로 등록했어요", Toast.LENGTH_SHORT).show() }) { Text("집 와이파이로 등록") }
                 }
@@ -893,14 +906,23 @@ class MainActivity : ComponentActivity() {
                 var deep by remember { mutableStateOf(p.deepSave) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                        Text("30분 넘게 가만히 있으면 검색 완전히 쉼", fontSize = 14.sp, color = Txt)
+                        Text("가만히 있으면 검색 완전히 쉼 (${p.deepMin}분 뒤)", fontSize = 14.sp, color = Txt)
                         Text("잠잘 때·책상 앞에서 절약. 움직이면(걸음·몸 움직임) 바로 다시 켜져요", fontSize = 12.sp, color = Sub)
                     }
                     OnOffSwitch(deep, { deep = it; p.deepSave = it; if (!it) { p.deepIdle = false; BleNear.start(ctx, quiet = true) }; p.log("깊은 절전 ${if (it) "켬" else "끔"}") })
                 }
+                Stepper("절전 검색으로 낮추기까지 (가만히 있는 시간)", p.idleMin, "분", 1, 60, listOf(1, 3, 5, 10, 15, 30)) {
+                    p.idleMin = it; p.log("설정 저장: 절전 전환 ${it}분")
+                }
+                Stepper("검색을 완전히 쉬기까지 (가만히 있는 시간)", p.deepMin, "분", 5, 240, listOf(10, 15, 30, 60, 120, 180)) {
+                    p.deepMin = it; p.log("설정 저장: 깊은 절전 ${it}분")
+                }
+                Stepper("집 와이파이 추천 기준 (연결된 시간)", p.suggestMin, "분", 5, 1440, listOf(10, 30, 60, 120, 240, 480)) {
+                    p.suggestMin = it; p.log("설정 저장: 와이파이 추천 ${it}분")
+                }
                 var ms by remember { mutableStateOf(p.motionSave) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("5분간 가만히 있으면 절전 감시", fontSize = 14.sp, color = Txt, modifier = Modifier.weight(1f))
+                    Text("가만히 있으면 절전 감시 (${p.idleMin}분 뒤)", fontSize = 14.sp, color = Txt, modifier = Modifier.weight(1f))
                     OnOffSwitch(ms, { ms = it; p.motionSave = it; if (!it) { p.bleActive = true; BleNear.start(ctx, quiet = true) } })
                 }
                 Text("이 와이파이에 연결돼 있으면 차 감시 쉼 (여러 개 체크)", fontSize = 14.sp, color = Txt)
@@ -1019,6 +1041,29 @@ class MainActivity : ComponentActivity() {
                 }
                 Text("위젯 추가: 홈 화면 빈 곳을 길게 누르기 → 위젯 → 다가키 (3×1). 예전 위젯은 지우고 다시 추가하세요.",
                     fontSize = 12.sp, color = Sub)
+            }
+
+            Section("설정 백업·복원", "앱을 지우고 다시 설치해도 설정을 되돌려요", emoji = "💾") {
+                Text("지금 설정(거리·걸음·시간·와이파이·차 신호·위젯 등)을 '코드'로 만들어요. 카톡 '나에게 보내기'나 메모에 저장해 두면, " +
+                    "앱을 지웠다 다시 설치해도 코드를 붙여넣어 그대로 되돌릴 수 있어요. 가족 폰을 똑같이 맞출 때도 쓸 수 있어요. " +
+                    "(비밀번호·PIN은 들어 있지 않아요)", fontSize = 12.sp, color = Sub)
+                Button({
+                    val code = p.exportCode()
+                    startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(Intent.EXTRA_TEXT, "다가키 설정 코드 (v${Updater.installedVersion(ctx)})\n$code"), "설정 코드 보내기"))
+                }, Modifier.fillMaxWidth()) { Text("설정 코드 만들기·공유") }
+                OutlinedButton({
+                    val clip = (getSystemService(android.content.ClipboardManager::class.java))
+                        ?.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString() ?: ""
+                    val code = Regex("DAGAKEY1:[A-Za-z0-9_=-]+").find(clip)?.value
+                    val n = if (code != null) p.importCode(code) else -1
+                    if (n > 0) {
+                        p.log("설정 복원: ${n}개 항목")
+                        Notifier.persistent(ctx); DagaWidget.refresh(ctx, null); BleNear.start(ctx, quiet = true)
+                        Toast.makeText(ctx, "✓ 설정 ${n}개를 되돌렸어요 — 각 항목을 열어 확인하세요", Toast.LENGTH_LONG).show()
+                        settingsPage = null
+                    } else Toast.makeText(ctx, "복사한 글에서 설정 코드를 못 찾았어요. 코드를 먼저 복사하세요", Toast.LENGTH_LONG).show()
+                }, Modifier.fillMaxWidth()) { Text("복사한 코드 붙여넣어 복원") }
             }
 
             Section("업데이트", "현재 v${Updater.installedVersion(ctx)}", emoji = "⬆️") {

@@ -84,6 +84,75 @@ class Prefs(ctx: Context) {
         get() = sp.getLong("lastUpdCheck", 0)
         set(v) = sp.edit().putLong("lastUpdCheck", v).apply()
 
+    // ── 사용자가 바꿀 수 있는 시간·거리 (기본값은 예전 고정값) ──
+    /** 가만히 있으면 절전 검색으로 낮추기까지(분) */
+    var idleMin: Int
+        get() = sp.getInt("idleMin", 5)
+        set(v) = sp.edit().putInt("idleMin", v).apply()
+    /** 가만히 있으면 검색을 완전히 쉬기까지(분) */
+    var deepMin: Int
+        get() = sp.getInt("deepMin", 30)
+        set(v) = sp.edit().putInt("deepMin", v).apply()
+    /** 같은 와이파이에 이만큼(분) 연결돼 있었으면 '집 와이파이 추천' */
+    var suggestMin: Int
+        get() = sp.getInt("suggestMin", 30)
+        set(v) = sp.edit().putInt("suggestMin", v).apply()
+    /** '차 바로 옆' 판정 거리(m) — 도착 단계(30초 자동잠금 대비 다시 열기·원격 보조) */
+    var arrivalMeters: Int
+        get() = sp.getInt("arrivalM", 2)
+        set(v) = sp.edit().putInt("arrivalM", v).apply()
+    /** '지금 걷는 중' 판단: 최근 30초에 이만큼(걸음) 이상 */
+    var walkSteps: Int
+        get() = sp.getInt("walkSteps", 8)
+        set(v) = sp.edit().putInt("walkSteps", v).apply()
+    /** 하차 후 멀어짐 감시를 이어가는 최대 시간(분) */
+    var leaveWatchMin: Int
+        get() = sp.getInt("leaveWatchMin", 20)
+        set(v) = sp.edit().putInt("leaveWatchMin", v).apply()
+    /** 반복 안전장치: 30분 안에 자동 동작이 이 횟수를 넘으면 30분 멈춤 */
+    var brakeCount: Int
+        get() = sp.getInt("brakeCount", 4)
+        set(v) = sp.edit().putInt("brakeCount", v).apply()
+
+    // ── 설정 백업·복원 (코드로 내보내고 붙여넣기. 비밀번호·PIN 같은 건 넣지 않음) ──
+    private val backupKeys = listOf("stepTh", "lockDelay", "unlockM", "lockM", "trunkHoldMin", "approachRemote", "arrivalRemote",
+        "leaveRemote", "motionSave", "deepSave", "autoLock", "approach", "autoUnlock", "masterOn", "autoUpdate", "homeSsid",
+        "widgetOrder", "bleAddr", "bleRef", "calSamples", "carBt", "carBtName", "idleMin", "deepMin", "suggestMin", "arrivalM",
+        "walkSteps", "leaveWatchMin", "brakeCount", "relock", "autoRelock")
+
+    fun exportCode(): String {
+        val sb = StringBuilder()
+        for (k in backupKeys) {
+            val v = sp.all[k] ?: continue
+            val (ty, s) = when (v) {
+                is Boolean -> "b" to v.toString(); is Int -> "i" to v.toString(); is Long -> "l" to v.toString()
+                is Float -> "f" to v.toString(); is String -> "s" to v; else -> continue
+            }
+            sb.append(k).append('=').append(ty).append(':').append(java.net.URLEncoder.encode(s, "UTF-8")).append('\n')
+        }
+        return "DAGAKEY1:" + android.util.Base64.encodeToString(sb.toString().toByteArray(), android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
+    }
+
+    /** 코드에서 설정을 되돌림. 반환: 복원한 항목 수 (코드가 잘못되면 -1) */
+    fun importCode(code: String): Int {
+        val text = try { String(android.util.Base64.decode(code.trim().removePrefix("DAGAKEY1:"), android.util.Base64.URL_SAFE)) } catch (e: Exception) { return -1 }
+        val ed = sp.edit(); var n = 0
+        for (line in text.lines()) {
+            val i = line.indexOf('='); if (i <= 0) continue
+            val k = line.substring(0, i); if (k !in backupKeys) continue
+            val rest = line.substring(i + 1); val j = rest.indexOf(':'); if (j < 1) continue
+            val v = try { java.net.URLDecoder.decode(rest.substring(j + 1), "UTF-8") } catch (e: Exception) { continue }
+            try {
+                when (rest[0]) {
+                    'b' -> ed.putBoolean(k, v.toBoolean()); 'i' -> ed.putInt(k, v.toInt()); 'l' -> ed.putLong(k, v.toLong())
+                    'f' -> ed.putFloat(k, v.toFloat()); 's' -> ed.putString(k, v); else -> continue
+                }
+                n++
+            } catch (e: Exception) { }
+        }
+        ed.apply(); return if (n == 0) -1 else n
+    }
+
     // ── 배터리 절약 ──
     /** 집 와이파이 이름 (연결돼 있으면 차 감시 쉼) */
     var homeSsid by str("homeSsid")
@@ -260,7 +329,7 @@ class Prefs(ctx: Context) {
         val now = System.currentTimeMillis()
         val l = autoHist.split(",").mapNotNull { it.toLongOrNull() }.filter { now - it < 30 * 60_000 } + now
         autoHist = l.joinToString(",")
-        if (l.size > 4) { brakeUntil = now + 30 * 60_000; autoHist = ""; return true }
+        if (l.size > brakeCount) { brakeUntil = now + 30 * 60_000; autoHist = ""; return true }
         return false
     }
     val braked get() = System.currentTimeMillis() < brakeUntil
