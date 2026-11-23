@@ -20,7 +20,7 @@ object Notifier {
         m.createNotificationChannel(NotificationChannel(CH, "확인이 필요한 알림", NotificationManager.IMPORTANCE_HIGH))
         m.createNotificationChannel(NotificationChannel(CH_LOW, "빠른 제어 바", NotificationManager.IMPORTANCE_LOW))
         m.createNotificationChannel(NotificationChannel(CH_Q, "처리 결과·안내 (조용히)", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
-        m.createNotificationChannel(NotificationChannel(CH_UPD, "새 버전 알림", NotificationManager.IMPORTANCE_DEFAULT).apply { setSound(null, null); enableVibration(false) })
+        m.createNotificationChannel(NotificationChannel(CH_UPD, "중요 안내 (소리 없음)", NotificationManager.IMPORTANCE_DEFAULT).apply { setSound(null, null); enableVibration(false) })
         return m
     }
 
@@ -97,6 +97,23 @@ object Notifier {
             .setTimeoutAfter(60_000)
             .build()
     )
+
+    /** 접근성이 꺼졌거나(또는 켜져 있는데 기기가 멈춰 둠) 자동 동작이 안 될 때: 눌러서 접근성 설정 열기 */
+    fun accProblem(ctx: Context, enabledInSettings: Boolean) {
+        val pi = PendingIntent.getActivity(ctx, 45,
+            Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val t = if (enabledInSettings)
+            "접근성이 켜져 있지만 기기가 멈춰 둔 상태예요. 설정 › 접근성 › 설치된 앱 › 다가키를 끄고 다시 켜면 돌아와요. (눌러서 설정 열기)"
+        else "접근성이 꺼져 있어서 자동 열기·잠금이 안 돼요. 눌러서 다가키를 켜세요."
+        nm(ctx).notify(8, Notification.Builder(ctx, CH_UPD)
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setContentTitle(if (enabledInSettings) "접근성이 멈췄어요" else "접근성이 꺼져 있어요")
+            .setContentText("눌러서 접근성 설정 열기")
+            .setStyle(Notification.BigTextStyle().bigText(t))
+            .setContentIntent(pi).setAutoCancel(true).build())
+    }
+    fun accOk(ctx: Context) = ctx.getSystemService(NotificationManager::class.java).cancel(8)
 
     /** 주머니 속에서 폰 잠금 때문에 못 열었을 때: '잠금 해제 유지' 켜는 방법 안내 → 누르면 잠금화면 설정 */
     fun pocketTip(ctx: Context) {

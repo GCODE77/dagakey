@@ -175,6 +175,16 @@ class BleRefreshReceiver : BroadcastReceiver() {
         val p = Prefs(ctx)
         PowerSaver.checkIdle()
         BleNear.start(ctx, quiet = true)
+        // ★ 접근성이 꺼졌거나 '켜져 있는데 기기가 멈춰 둔' 상태면 알림 (6시간에 한 번) — 모르고 차에 갔다가 안 열리는 일 방지
+        val en = (android.provider.Settings.Secure.getString(ctx.contentResolver, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "")
+            .split(':').any { it.startsWith(ctx.packageName + "/") }
+        if (p.masterOn && !KiaAutoService.isConnected) {
+            if (System.currentTimeMillis() - p.lastAccWarnAt > 6 * 3600_000L) {
+                p.lastAccWarnAt = System.currentTimeMillis()
+                p.log(if (en) "⚠ 접근성이 켜져 있지만 멈춰 있음 → 껐다 켜야 함" else "⚠ 접근성이 꺼져 있음")
+                Notifier.accProblem(ctx, en)
+            }
+        } else if (KiaAutoService.isConnected) Notifier.accOk(ctx)
         schedule(ctx)
     }
     companion object {

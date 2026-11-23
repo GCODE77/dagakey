@@ -79,6 +79,7 @@ class MainActivity : ComponentActivity() {
         p.autoUnlock = true; p.useAppAutomation = true   // (자동 잠금/열기 켜기·끄기는 사용자 설정을 그대로 둠)
         Notifier.persistent(this)
         Updater.schedule(this)                                  // 12시간마다 새 버전 확인
+        BleRefreshReceiver.schedule(this)                       // 20분마다 차 감시 새로고침 + 접근성 점검
         wantUpdate = intent?.getBooleanExtra("update", false) == true   // 알림을 눌러 들어온 경우
         handleLink(intent)                                              // 가족이 보낸 차 신호 링크
         setContent {
@@ -184,6 +185,11 @@ class MainActivity : ComponentActivity() {
             owner.lifecycle.addObserver(obs); onDispose { owner.lifecycle.removeObserver(obs) }
         }
         val acc = remember(tick) { KiaAutoService.isConnected }
+        // ★ 설정엔 '켜짐'인데 기기가 서비스를 멈춰 둔(비정상 종료) 경우가 있음 → '꺼짐'과 구분해서 안내
+        val accEnabled = remember(tick) { accEnabledInSettings() }
+        val graceUntil = remember { System.currentTimeMillis() + 15_000 }
+        val accConnecting = accEnabled && !acc && System.currentTimeMillis() < graceUntil
+        val accStuck = accEnabled && !acc && !accConnecting
         val bat = remember(tick) { getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName) }
         var demo by remember { mutableStateOf(p.demoMode) }
         val lastLine = remember(tick, status) { p.lastLog.lineSequence().firstOrNull()?.takeIf { it.isNotBlank() } ?: "아직 기록 없음" }
@@ -275,6 +281,8 @@ class MainActivity : ComponentActivity() {
             val (heroTitle, heroSub, heroColor) = when {
                 !master -> Triple("자동 꺼짐", "자동 잠금·열기를 쉬는 중 · 버튼·위젯은 동작해요", Sub)
                 braked -> Triple("잠시 멈춤", "자동 동작이 반복돼 30분간 쉬어요", Red)
+                accConnecting -> Triple("접근성 연결 중…", "잠시만 기다려 주세요", Blue)
+                accStuck -> Triple("접근성이 멈췄어요", "껐다가 다시 켜면 돌아와요 (아래 빨간 항목)", Red)
                 !allReady -> Triple("설정이 필요해요", "아래 빨간 항목을 눌러 켜주세요", Red)
                 inCar -> Triple("주행 중", "운전 중에는 자동 잠금·열기를 멈춰요", Blue)
                 else -> Triple("자동으로 지키는 중", "멀어지면 잠그고, 다가가면 열어요", Green)
@@ -297,27 +305,33 @@ class MainActivity : ComponentActivity() {
                             Text(heroSub, fontSize = 13.sp, color = Sub)
                         }
                         // 전체 켜기/끄기
-                        Switch(master, {
-                            master = it; p.masterOn = it
-                            if (it) p.brakeUntil = 0
-                            p.log(if (it) "다가키 자동 켜짐" else "다가키 자동 꺼짐 (수동 버튼·위젯만 동작)")
-                            applyAuto(); tick++
-                        })
-                    }
-                    // 따로 켜고 끄기 (눌러서 전환)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Chip("다가가면 열기", master && approachOn && allReady && !inCar, enabled = master, icon = R.drawable.ic_btn_unlock) {
-                            approachOn = !approachOn; p.approachUnlock = approachOn
-                            p.log("다가가면 열기 ${if (approachOn) "켬" else "끔"}"); applyAuto()
-                        }
-                        Chip("멀어지면 잠금", master && autoLockOn && allReady && !inCar, enabled = master, icon = R.drawable.ic_btn_lock) {
-                            autoLockOn = !autoLockOn; p.autoLock = autoLockOn
-                            p.log("멀어지면 잠금 ${if (autoLockOn) "켬" else "끔"}"); applyAuto()
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            OnOffSwitch(master, {
+                                master = it; p.masterOn = it
+                                if (it) p.brakeUntil = 0
+                                p.log(if (it) "다가키 자동 켜짐" else "다가키 자동 꺼짐 (수동 버튼·위젯만 동작)")
+                                applyAuto(); tick++
+                            })
+                            Text(if (master) "자동 켜짐" else "자동 꺼짐", fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                                color = if (master) Green else Sub)
                         }
                     }
-                    if (master) Text(
-                        if (inCar) "주행 중 — 자동 동작 멈춤" else "칩을 눌러 따로 켜고 끌 수 있어요",
-                        fontSize = 11.sp, color = Sub)
+                    // 따로 켜고 끄기: 줄을 누르거나 오른쪽 스위치
+                    val uM = remember(tick) { p.unlockMeters }
+                    val lM = remember(tick) { p.lockMeters }
+                    AutoRow(R.drawable.ic_btn_unlock, Blue.copy(alpha = 0.25f), "다가가면 열기",
+                        if (approachOn) "약 ${uM}m 안으로 걸어오면 자동으로 열어요" else "다가가도 자동으로 열지 않아요",
+                        approachOn, master) {
+                        approachOn = it; p.approachUnlock = it
+                        p.log("다가가면 열기 ${if (it) "켬" else "끔"}"); applyAuto()
+                    }
+                    AutoRow(R.drawable.ic_btn_lock, Green.copy(alpha = 0.22f), "멀어지면 잠금",
+                        if (autoLockOn) "약 ${lM}m 이상 멀어지면 자동으로 잠가요" else "멀어져도 자동으로 잠그지 않아요",
+                        autoLockOn, master) {
+                        autoLockOn = it; p.autoLock = it
+                        p.log("멀어지면 잠금 ${if (it) "켬" else "끔"}"); applyAuto()
+                    }
+                    if (inCar) Text("주행 중 — 자동 동작을 멈춰요", fontSize = 12.sp, color = Blue)
                 }
             }
 
@@ -340,10 +354,10 @@ class MainActivity : ComponentActivity() {
                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 4.dp, top = 2.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 val on = { w: String -> pressedBtn == w }
-                BigButton("열기", R.drawable.ic_btn_unlock, if (on("열기")) Blue else Card2, if (on("열기")) Color.White else Txt, Modifier.weight(1f), !busy) {
+                BigButton("열기", R.drawable.ic_btn_unlock, if (on("열기")) Blue else Color(0xFF1B2B47), if (on("열기")) Color.White else Txt, Modifier.weight(1f), !busy) {
                     mark("열기"); run("열기") { it.unlock(); "열기 요청을 보냈어요" }
                 }
-                BigButton("잠금", R.drawable.ic_btn_lock, if (on("잠금")) Blue else Card2, if (on("잠금")) Color.White else Txt, Modifier.weight(1f), !busy) {
+                BigButton("잠금", R.drawable.ic_btn_lock, if (on("잠금")) Blue else Color(0xFF17312B), if (on("잠금")) Color.White else Txt, Modifier.weight(1f), !busy) {
                     mark("잠금"); run("잠금") { it.lock(); "잠금 요청을 보냈어요" }
                 }
                 BigButton("트렁크", R.drawable.ic_btn_trunk, if (on("트렁크")) Blue else Card2, if (on("트렁크")) Color.White else Txt, Modifier.weight(1f), !busy) {
@@ -361,9 +375,16 @@ class MainActivity : ComponentActivity() {
                 fontSize = 12.sp, color = Sub, modifier = Modifier.padding(start = 4.dp))
 
             // ── 준비 체크: 문제 있을 때만 표시 (모두 정상이면 숨김) ──
-            if (!allReady) Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Card1)) {
+            if (!allReady && !accConnecting) Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Card1)) {
                 Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                    if (!acc) CheckRow("접근성 권한", false, "눌러서 켜기") {
+                    if (!acc && accStuck) {
+                        CheckRow("접근성이 멈췄어요", false, "껐다 켜기") {
+                            Toast.makeText(this@MainActivity, "다가키를 끄고 → 다시 켜세요", Toast.LENGTH_LONG).show()
+                            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        }
+                        Text("설정에는 켜져 있지만 기기가 서비스를 멈춰 둔 상태예요(앱이 갑자기 종료됐을 때 생겨요). 설정 › 접근성 › 설치된 앱 › 다가키를 한 번 끄고 다시 켜면 바로 돌아와요.",
+                            fontSize = 12.sp, color = Sub, modifier = Modifier.padding(horizontal = 18.dp).padding(bottom = 8.dp))
+                    } else if (!acc && !accConnecting) CheckRow("접근성 권한", false, "눌러서 켜기") {
                         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     }
                     if (!bat) CheckRow("배터리 제한 없음", false, "눌러서 해제") { openBattery() }
@@ -514,6 +535,43 @@ class MainActivity : ComponentActivity() {
         ) { Text(t, fontSize = 18.sp, color = Txt) }
     }
 
+
+    /** 설정에서 접근성이 '켜짐'으로 되어 있는지 (서비스가 실제로 붙어 있는지와는 별개) */
+    private fun accEnabledInSettings(): Boolean =
+        (Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "")
+            .split(':').any { it.startsWith("$packageName/") }
+
+    /** 켜짐=초록 트랙+흰 손잡이 / 꺼짐=어두운 트랙+테두리 — 한눈에 구분 */
+    @Composable
+    private fun OnOffSwitch(checked: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true) {
+        Switch(checked, onChange, enabled = enabled, colors = SwitchDefaults.colors(
+            checkedThumbColor = Color.White, checkedTrackColor = Green, checkedBorderColor = Green,
+            uncheckedThumbColor = Color(0xFFB8C2D0), uncheckedTrackColor = Card1, uncheckedBorderColor = Sub,
+            disabledCheckedTrackColor = Green.copy(alpha = 0.35f), disabledUncheckedTrackColor = Card1,
+            disabledUncheckedBorderColor = Sub.copy(alpha = 0.4f)))
+    }
+
+    /** 자동 기능 한 줄: [아이콘] 제목 / 설명 …… [스위치 + 켜짐·꺼짐] — 줄 전체를 눌러도 전환 */
+    @Composable
+    private fun AutoRow(icon: Int, iconBg: Color, title: String, sub: String, on: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+        val active = on && enabled
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Card2)
+            .clickable(enabled = enabled) { onChange(!on) }.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(42.dp).clip(CircleShape).background(iconBg), contentAlignment = Alignment.Center) {
+                Image(painterResource(icon), null, Modifier.size(22.dp), alpha = if (active) 1f else 0.4f)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = if (enabled) Txt else Sub)
+                Text(sub, fontSize = 12.sp, color = if (active) Green else Sub)
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                OnOffSwitch(on, onChange, enabled)
+                Text(if (on) "켜짐" else "꺼짐", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (active) Green else Sub)
+            }
+        }
+    }
 
     // 설정 화면: 목록(한 화면) → 항목을 누르면 그 항목만 전체 화면으로
     private var settingsPage by mutableStateOf<String?>(null)
@@ -681,7 +739,7 @@ class MainActivity : ComponentActivity() {
                         Text("멀리서 감지됐을 때 원격으로도 열기", fontSize = 14.sp, color = Txt)
                         Text("끔(권장): 처음 감지(약 ${metersNow}m)에서는 디지털키로만 열어요 — 멀리서 열리는 일 없음", fontSize = 12.sp, color = Sub)
                     }
-                    Switch(remoteOn, { remoteOn = it; p.approachRemote = it; p.log("멀리서 원격 열기 ${if (it) "허용" else "끔"}") })
+                    OnOffSwitch(remoteOn, { remoteOn = it; p.approachRemote = it; p.log("멀리서 원격 열기 ${if (it) "허용" else "끔"}") })
                 }
                 var arrRemote by remember { mutableStateOf(p.arrivalRemote) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -689,7 +747,7 @@ class MainActivity : ComponentActivity() {
                         Text("차 바로 옆(약 2m)에서 안 열렸으면 원격으로도", fontSize = 14.sp, color = Txt)
                         Text("켬(권장): 다가오다가 차 바로 옆에 왔는데 디지털키로 아직 못 열었으면, 그때 원격으로도 한 번 열어요", fontSize = 12.sp, color = Sub)
                     }
-                    Switch(arrRemote, { arrRemote = it; p.arrivalRemote = it; p.log("도착 시 원격 보조 ${if (it) "켬" else "끔"}") })
+                    OnOffSwitch(arrRemote, { arrRemote = it; p.arrivalRemote = it; p.log("도착 시 원격 보조 ${if (it) "켬" else "끔"}") })
                 }
             }
 
@@ -710,15 +768,21 @@ class MainActivity : ComponentActivity() {
                     if (p.lastRssiAt == 0L || age > 60) "지금 차 신호: 안 잡힘 (멀거나 감시 쉼)" else "지금 차 신호: ${BleNear.dist(p, p.lastRssi)} · ${age}초 전"
                 }
                 Text(liveLock, fontSize = 13.sp, color = Sub)
-                Text("걸음 수와 거리가 둘 다 넘어야 잠겨요. 차 주변(트렁크 등)을 돌아다녀도 안 잠기고, 트렁크 버튼을 누르면 10분간 쉬어요. " +
+                Text("걸음 수와 거리가 둘 다 넘어야 잠겨요. 차 주변(트렁크 등)을 돌아다녀도 안 잠겨요. " +
                     "가만히 있을 때 조금씩 움직인 걸음은 세지 않아요.", fontSize = 12.sp, color = Sub)
+                var holdNow by remember { mutableStateOf(p.trunkHoldMin) }
+                Stepper("트렁크를 쓴 뒤 자동 잠금을 쉬는 시간", p.trunkHoldMin, "분", 0, 60, listOf(0, 3, 5, 10, 15, 30)) {
+                    p.trunkHoldMin = it; holdNow = it; p.log("설정 저장: 트렁크 후 자동 잠금 보류 ${it}분")
+                }
+                Text(if (holdNow == 0) "0분: 트렁크를 써도 멀어지면(걸음+거리) 바로 잠겨요"
+                     else "트렁크 버튼을 누르면 ${holdNow}분 동안은 멀어져도 잠그지 않아요", fontSize = 12.sp, color = Sub)
                 var lockRemote by remember { mutableStateOf(p.leaveRemote) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("디지털키가 끊겨도 원격으로 잠금", fontSize = 14.sp, color = Txt)
                         Text("켬(권장): 멀어지면 디지털키가 끊기므로 원격으로 확실히 잠가요", fontSize = 12.sp, color = Sub)
                     }
-                    Switch(lockRemote, { lockRemote = it; p.leaveRemote = it; p.log("자동 잠금 원격 ${if (it) "허용" else "끔"}") })
+                    OnOffSwitch(lockRemote, { lockRemote = it; p.leaveRemote = it; p.log("자동 잠금 원격 ${if (it) "허용" else "끔"}") })
                 }
             }
 
@@ -788,7 +852,7 @@ class MainActivity : ComponentActivity() {
                 var ms by remember { mutableStateOf(p.motionSave) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("5분간 가만히 있으면 절전 감시", fontSize = 14.sp, color = Txt, modifier = Modifier.weight(1f))
-                    Switch(ms, { ms = it; p.motionSave = it; if (!it) { p.bleActive = true; BleNear.start(ctx, quiet = true) } })
+                    OnOffSwitch(ms, { ms = it; p.motionSave = it; if (!it) { p.bleActive = true; BleNear.start(ctx, quiet = true) } })
                 }
                 Text("이 와이파이에 연결돼 있으면 차 감시 쉼 (여러 개 체크)", fontSize = 14.sp, color = Txt)
                 var homes by remember { mutableStateOf(PowerSaver.homeList(p)) }
@@ -913,7 +977,7 @@ class MainActivity : ComponentActivity() {
                         Text("새 버전 자동 확인 (12시간마다)", fontSize = 14.sp, color = Txt)
                         Text("인터넷은 GitHub에서 새 버전 확인·다운로드에만 써요", fontSize = 12.sp, color = Sub)
                     }
-                    Switch(au, { au = it; p.autoUpdate = it; Updater.schedule(ctx) })
+                    OnOffSwitch(au, { au = it; p.autoUpdate = it; Updater.schedule(ctx) })
                 }
                 var chk by remember { mutableStateOf("") }
                 OutlinedButton({

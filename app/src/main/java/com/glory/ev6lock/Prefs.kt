@@ -124,6 +124,14 @@ class Prefs(ctx: Context) {
     var lastDkUnlockAt: Long
         get() = sp.getLong("lastDkUnlock", 0)
         set(v) = sp.edit().putLong("lastDkUnlock", v).apply()
+    /** 트렁크를 누른 뒤 자동 잠금을 쉬는 시간(분). 0이면 쉬지 않음 */
+    var trunkHoldMin: Int
+        get() = sp.getInt("trunkHoldMin", 10)
+        set(v) = sp.edit().putInt("trunkHoldMin", v).apply()
+    /** 접근성 문제 알림을 마지막으로 보낸 시각 (6시간에 한 번만) */
+    var lastAccWarnAt: Long
+        get() = sp.getLong("accWarnAt", 0)
+        set(v) = sp.edit().putLong("accWarnAt", v).apply()
     /** 이 시각까지 자동 잠금 보류 (트렁크를 쓰는 중) */
     var lockHoldUntil: Long
         get() = sp.getLong("lockHold", 0)
