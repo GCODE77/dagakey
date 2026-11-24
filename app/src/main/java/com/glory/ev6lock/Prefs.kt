@@ -114,11 +114,34 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("brakeCount", 4)
         set(v) = sp.edit().putInt("brakeCount", v).apply()
 
+    // ── 제어탭 문 상태 확인 (기아 앱 제어탭은 아래로 당겨야 새로고침됨) ──
+    /** 제어탭에서 문 상태를 읽어 판단 (끄면 예전 방식) */
+    var doorCheck: Boolean
+        get() = sp.getBoolean("doorCheck", true)
+        set(v) = sp.edit().putBoolean("doorCheck", v).apply()
+    /** 같은 문 상태가 이 시간(초) 이상 보일 때만 믿음 */
+    var doorStableSec: Int
+        get() = sp.getInt("doorStableSec", 3)
+        set(v) = sp.edit().putInt("doorStableSec", v).apply()
+    /** 아래로 당긴 뒤 이 시간(초)이 지나야 믿음 (새로고침이 끝나길 기다림) */
+    var refreshWaitSec: Int
+        get() = sp.getInt("refreshWaitSec", 4)
+        set(v) = sp.edit().putInt("refreshWaitSec", v).apply()
+    /** 버튼을 눌렀는데 상태가 안 바뀌면 이 시간(초) 뒤에 한 번 더 당겨서 새로고침 */
+    var verifyRefreshSec: Int
+        get() = sp.getInt("verifyRefreshSec", 6)
+        set(v) = sp.edit().putInt("verifyRefreshSec", v).apply()
+    /** 버튼을 눌렀는데 상태가 안 바뀌면 이 시간(초) 뒤에 다시 누름 */
+    var verifyTimeoutSec: Int
+        get() = sp.getInt("verifyTimeoutSec", 15)
+        set(v) = sp.edit().putInt("verifyTimeoutSec", v).apply()
+
     // ── 설정 백업·복원 (코드로 내보내고 붙여넣기. 비밀번호·PIN 같은 건 넣지 않음) ──
     private val backupKeys = listOf("stepTh", "lockDelay", "unlockM", "lockM", "trunkHoldMin", "approachRemote", "arrivalRemote",
         "leaveRemote", "motionSave", "deepSave", "autoLock", "approach", "autoUnlock", "masterOn", "autoUpdate", "homeSsid",
         "widgetOrder", "bleAddr", "bleRef", "calSamples", "carBt", "carBtName", "idleMin", "deepMin", "suggestMin", "arrivalM",
-        "walkSteps", "leaveWatchMin", "brakeCount", "relock", "autoRelock")
+        "walkSteps", "leaveWatchMin", "brakeCount", "relock", "autoRelock", "doorCheck", "doorStableSec", "refreshWaitSec",
+        "verifyRefreshSec", "verifyTimeoutSec")
 
     fun exportCode(): String {
         val sb = StringBuilder()

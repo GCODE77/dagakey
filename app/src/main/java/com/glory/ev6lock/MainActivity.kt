@@ -1029,6 +1029,30 @@ class MainActivity : ComponentActivity() {
                     fontSize = 12.sp, color = Sub)
             }
 
+            Section("문 상태 확인", if (p.doorCheck) "제어탭에서 잠김/열림을 읽어 판단해요" else "꺼짐 — 예전 방식(버튼만 누름)", emoji = "🔍") {
+                var dc by remember { mutableStateOf(p.doorCheck) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text("제어탭에서 문 상태를 읽어 판단", fontSize = 14.sp, color = Txt)
+                        Text("이미 잠겨 있으면 잠그지 않고, 잠근 뒤 실제로 잠겼는지 확인해요. 문제가 생기면 끄면 예전 방식으로 돌아가요", fontSize = 12.sp, color = Sub)
+                    }
+                    OnOffSwitch(dc, { dc = it; p.doorCheck = it; p.log("문 상태 확인 ${if (it) "켬" else "끔"}") })
+                }
+                Text("기아 앱 제어탭은 화면을 아래로 당겨야 최신 상태로 새로고침돼요. 앱이 먼저 당긴 뒤 아래 시간만큼 기다려서 확인해요.", fontSize = 12.sp, color = Sub)
+                Stepper("같은 상태가 이 시간 이상 보여야 믿음", p.doorStableSec, "초", 1, 15, listOf(1, 2, 3, 5, 8, 10)) {
+                    p.doorStableSec = it; p.log("설정 저장: 문 상태 안정 ${it}초")
+                }
+                Stepper("아래로 당긴 뒤 기다리는 시간", p.refreshWaitSec, "초", 1, 15, listOf(2, 3, 4, 5, 8, 10)) {
+                    p.refreshWaitSec = it; p.log("설정 저장: 새로고침 대기 ${it}초")
+                }
+                Stepper("누른 뒤 상태가 안 바뀌면 다시 당기기까지", p.verifyRefreshSec, "초", 2, 30, listOf(3, 4, 6, 8, 10, 15)) {
+                    p.verifyRefreshSec = it; p.log("설정 저장: 다시 당기기 ${it}초")
+                }
+                Stepper("누른 뒤 상태가 안 바뀌면 다시 누르기까지", p.verifyTimeoutSec, "초", 5, 60, listOf(8, 10, 15, 20, 30, 45)) {
+                    p.verifyTimeoutSec = it; p.log("설정 저장: 다시 누르기 ${it}초")
+                }
+            }
+
             Section("설정 백업·복원", "앱을 지우고 다시 설치해도 설정을 되돌려요", emoji = "💾") {
                 Text("지금 설정(거리·걸음·시간·와이파이·차 신호·위젯 등)을 '코드'로 만들어요. 카톡 '나에게 보내기'나 메모에 저장해 두면, " +
                     "앱을 지웠다 다시 설치해도 코드를 붙여넣어 그대로 되돌릴 수 있어요. 가족 폰을 똑같이 맞출 때도 쓸 수 있어요. " +

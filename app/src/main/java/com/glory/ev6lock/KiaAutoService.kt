@@ -144,7 +144,7 @@ class KiaAutoService : AccessibilityService() {
         if (isControl()) ensureTicker()
     }
 
-    private fun done() { pendingAction = ""; dkOnly = false; relaunch = 0; ctrlRetry = 0; hintCount = 0; lastHint = ""; verifyStart = 0L; doorSeen = null; actionStart = 0L; ticking = false; waitingUnlock = false; pressed = false; launchedAt = 0L; homeTries = 0; remoteSent = false; backDone = false; deferred = false; diagDone = false; dkTaps = 0; dkTapAt = 0L }
+    private fun done() { pendingAction = ""; dkOnly = false; relaunch = 0; ctrlRetry = 0; hintCount = 0; lastHint = ""; verifyStart = 0L; doorSeen = null; refreshedAt = 0L; verifyRefreshed = false; actionStart = 0L; ticking = false; waitingUnlock = false; pressed = false; launchedAt = 0L; homeTries = 0; remoteSent = false; backDone = false; deferred = false; diagDone = false; dkTaps = 0; dkTapAt = 0L }
 
     @Suppress("DEPRECATION")
     private fun wakeScreen() {
@@ -159,7 +159,7 @@ class KiaAutoService : AccessibilityService() {
     /** 자동 동작 시작: 화면을 켜고(징검다리 화면) 잠겨 있으면 해제를 요청 → 풀리면 기아 앱 */
     fun kick() {
         if (pendingAction.isBlank()) return
-        actionStart = 0L; swipedBack = 0; pressed = false; homeTries = 0; remoteSent = false; dkTaps = 0; dkTapAt = 0L; relaunch = 0; verifyStart = 0L; doorSeen = null
+        actionStart = 0L; swipedBack = 0; pressed = false; homeTries = 0; remoteSent = false; dkTaps = 0; dkTapAt = 0L; relaunch = 0; verifyStart = 0L; doorSeen = null; refreshedAt = 0L; verifyRefreshed = false
         wakeScreen()
         val km = getSystemService(KeyguardManager::class.java)
         if (km.isKeyguardLocked) {
@@ -193,6 +193,8 @@ class KiaAutoService : AccessibilityService() {
     private var verifyStart = 0L              // 제어탭 버튼을 누른 시각 (상태가 바뀌는지 확인 중)
     private var doorSeen: DoorState? = null   // 마지막으로 본 문 상태
     private var doorSeenAt = 0L               // 그 상태를 처음 본 시각 (3초 이상 같아야 믿음)
+    private var refreshedAt = 0L              // 제어탭을 아래로 당겨 새로고침한 시각 (0=아직 안 함)
+    private var verifyRefreshed = false       // 버튼 누른 뒤 상태 확인 중 새로고침을 이미 했는지
 
     private fun firstNode(n: AccessibilityNodeInfo?, pred: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
         if (n == null) return null
@@ -207,6 +209,7 @@ class KiaAutoService : AccessibilityService() {
      * 제어탭이 아니면 null. 반환: (상태, 그 버튼 노드)
      */
     private fun readDoorTile(root: AccessibilityNodeInfo?): Pair<DoorState, AccessibilityNodeInfo>? {
+        if (!p.doorCheck) return null   // 설정에서 끔 → 예전 방식
         val label = firstNode(root) { it.isVisibleToUser && it.text?.toString()?.replace(" ", "") == "문" } ?: return null
         var c: AccessibilityNodeInfo? = label.parent
         var depth = 0
@@ -216,6 +219,14 @@ class KiaAutoService : AccessibilityService() {
             c = c.parent; depth++
         }
         return null
+    }
+
+    /** 제어탭은 '아래로 당겨야' 새로고침됨 (사용자 확인) — 화면 위쪽에서 아래로 천천히 끌기 */
+    private fun pullToRefresh(): Boolean {
+        val dm = resources.displayMetrics
+        val x = dm.widthPixels * 0.5f
+        val path = Path().apply { moveTo(x, dm.heightPixels * 0.28f); lineTo(x, dm.heightPixels * 0.68f) }
+        return dispatchGesture(GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 700)).build(), null, null)
     }
 
     /** 원하는 상태가 이미 되어 있어 버튼을 누를 필요가 없을 때 */
@@ -407,19 +418,31 @@ class KiaAutoService : AccessibilityService() {
         if (verifyStart > 0L) {
             val st = readDoorTile(root)?.first
             if (st == (if (pendingAction == "lock") DoorState.LOCKED else DoorState.UNLOCKED)) { finishVerified(); return }
-            if (System.currentTimeMillis() - verifyStart > 15_000) {
-                verifyStart = 0L
+            if (System.currentTimeMillis() - verifyStart > p.verifyRefreshSec * 1000L && !verifyRefreshed) {
+                verifyRefreshed = true; p.log("상태가 아직 안 바뀌어 새로고침(아래로 당김)"); pullToRefresh()
+            }
+            if (System.currentTimeMillis() - verifyStart > p.verifyTimeoutSec * 1000L) {
+                verifyStart = 0L; verifyRefreshed = false
                 if (ctrlRetry < 2) { ctrlRetry++; p.log("상태가 안 바뀜 — ${actionName()} 다시 누름 ($ctrlRetry/2)") }
                 else { failFinal(pendingAction); return }
             }
             return
         }
         // 원격을 먼저 보낸 열기는 걸어오는 시간을 고려해 오래 기다림
-        if (elapsed > (if (remoteSent) 100_000 else if (dkOnly) 70_000 else 40_000)) {
+        val limitMs = if (remoteSent) 100_000 else if (dkOnly) 70_000 else 40_000
+        if (elapsed > limitMs) {
             // ★ 실패하기 전에 현재 문 상태부터 확인: 이미 원하는 상태면 실패가 아님 (11-24 17:36은 이미 잠겨 있었던 것으로 보임)
+            //   제어탭은 아래로 당겨야 최신이 되므로, 아직 안 당겼으면 당기고 8초 더 기다림
+            val nowMs = System.currentTimeMillis()
             readDoorTile(root)?.let { (st, _) ->
-                if (pendingAction == "lock" && st == DoorState.LOCKED) { finishAlready("잠겨 있음"); return }
-                if (pendingAction == "unlock" && st == DoorState.UNLOCKED) { finishAlready("열려 있음"); return }
+                if (refreshedAt == 0L) {
+                    refreshedAt = nowMs; p.log("시간 초과 직전 — 제어탭 새로고침 후 상태 확인"); pullToRefresh()
+                    actionStart = nowMs - limitMs + 8_000; return
+                }
+                if (nowMs - refreshedAt >= p.refreshWaitSec * 1000L) {
+                    if (pendingAction == "lock" && st == DoorState.LOCKED) { finishAlready("잠겨 있음"); return }
+                    if (pendingAction == "unlock" && st == DoorState.UNLOCKED) { finishAlready("열려 있음"); return }
+                }
             }
             // ★ 실측(11-24 17:36): 잠금이 '버튼을 못 찾음'으로 조용히 끝나 차가 열린 채 남음
             //   → 그때 화면 글자를 기록(원인 분석), 기아 앱을 새로 띄워 2번까지 다시 시도, 끝내 실패하면 알림
@@ -449,13 +472,21 @@ class KiaAutoService : AccessibilityService() {
         val door = readDoorTile(root)
         if (door != null) {
             val (st, btn) = door
-            // 오래된 화면 값에 속지 않도록 같은 상태가 3초 이상 보일 때만 '이미 됐음'으로 판단
-            if (st != doorSeen) { doorSeen = st; doorSeenAt = System.currentTimeMillis(); p.log("문 상태(제어탭): ${if (st == DoorState.LOCKED) "잠김" else "열림"}") }
-            val stable = System.currentTimeMillis() - doorSeenAt >= 3_000
-            if (wantLock && st == DoorState.LOCKED) { if (stable) finishAlready("잠겨 있음"); return }
-            if (!wantLock && st == DoorState.UNLOCKED) { if (stable) finishAlready("열려 있음"); return }
+            val nowMs = System.currentTimeMillis()
+            // ★ 제어탭은 '아래로 당겨야' 새로고침됨 → 처음 보이면 먼저 당겨서 최신 상태로 (오래된 값에 속지 않기)
+            if (refreshedAt == 0L) {
+                refreshedAt = nowMs; doorSeen = null
+                p.log("제어탭 새로고침 (아래로 당김) — 최신 문 상태 확인")
+                pullToRefresh()
+                return
+            }
+            if (st != doorSeen) { doorSeen = st; doorSeenAt = nowMs; p.log("문 상태(제어탭): ${if (st == DoorState.LOCKED) "잠김" else "열림"}") }
+            // 당긴 뒤 설정한 시간이 지났고, 같은 상태가 설정한 시간 이상 보일 때만 '이미 됐음'으로 판단
+            val trusted = nowMs - doorSeenAt >= p.doorStableSec * 1000L && nowMs - refreshedAt >= p.refreshWaitSec * 1000L
+            if (wantLock && st == DoorState.LOCKED) { if (trusted) finishAlready("잠겨 있음"); return }
+            if (!wantLock && st == DoorState.UNLOCKED) { if (trusted) finishAlready("열려 있음"); return }
             if (wantLock && !dkOnly) {   // 열려 있고 잠가야 함 + 원격 허용 → 제어탭 버튼을 바로 누르고 상태 확인
-                if (clickOrTap(btn)) { verifyStart = System.currentTimeMillis(); p.log("잠금 버튼 누름 (제어탭, 원격) — 상태 확인 중") }
+                if (clickOrTap(btn)) { verifyStart = System.currentTimeMillis(); verifyRefreshed = false; p.log("잠금 버튼 누름 (제어탭, 원격) — 상태 확인 중") }
                 return
             }
             goHome(root); return    // 디지털키로 열기·디지털키 전용 잠금은 홈 탭에서
