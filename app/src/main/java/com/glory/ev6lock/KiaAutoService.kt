@@ -123,7 +123,7 @@ class KiaAutoService : AccessibilityService() {
         if (isControl()) ensureTicker()
     }
 
-    private fun done() { pendingAction = ""; dkOnly = false; relaunch = 0; ctrlRetry = 0; actionStart = 0L; ticking = false; waitingUnlock = false; pressed = false; launchedAt = 0L; homeTries = 0; remoteSent = false; backDone = false; deferred = false; diagDone = false; dkTaps = 0; dkTapAt = 0L }
+    private fun done() { pendingAction = ""; dkOnly = false; relaunch = 0; ctrlRetry = 0; hintCount = 0; lastHint = ""; actionStart = 0L; ticking = false; waitingUnlock = false; pressed = false; launchedAt = 0L; homeTries = 0; remoteSent = false; backDone = false; deferred = false; diagDone = false; dkTaps = 0; dkTapAt = 0L }
 
     @Suppress("DEPRECATION")
     private fun wakeScreen() {
@@ -166,6 +166,8 @@ class KiaAutoService : AccessibilityService() {
     private var homeTries = 0
     private var relaunch = 0
     private var ctrlRetry = 0
+    private var hintCount = 0
+    private var lastHint = ""
 
     private fun launchKia() {
         p.log("기아 앱 실행 → ${actionName()}")
@@ -278,6 +280,15 @@ class KiaAutoService : AccessibilityService() {
         }
         val allText = collectText(root)
 
+        // ★ 문이 잠겼는지/열렸는지 기아 앱이 글자로 보여주는지 알아보기 위해, 문·잠금 관련 글자를 기록 (화면이 바뀔 때마다, 한 동작에 최대 4번)
+        if (isControl() && hintCount < 4) {
+            val hint = allText.map { it.trim() }.filter { s ->
+                s.length in 2..40 && (s.contains("잠김") || s.contains("잠금") || s.contains("열림") || s.contains("닫힘") || s.contains("도어") ||
+                    s.contains("문 ") || s.contains("트렁크") || s.contains("디지털") || s.contains("원격"))
+            }.distinct().take(16).joinToString(" | ")
+            if (hint.isNotEmpty() && hint != lastHint) { lastHint = hint; hintCount++; p.log("기아 화면 문·잠금 글자: $hint") }
+        }
+
         if (pendingAction != "learn" && allText.any { it.contains("USB") && it.contains("디버깅") }) {
             p.log("기아 앱이 USB 디버깅 차단 화면을 띄움 → USB 디버깅을 끄세요"); done(); return
         }
@@ -308,6 +319,7 @@ class KiaAutoService : AccessibilityService() {
             lastSig = sig
             learnFile("\n--- 화면 ---")
             learnFile("[글자] " + texts.take(80).joinToString(" | "))
+            p.log("[학습] 화면 글자: " + texts.take(40).joinToString(" | "))   // 앱 기록에도 남겨 USB로 바로 읽을 수 있게
             learnFile("[버튼] " + collectClickable(root).distinct().take(50).joinToString(" | "))
         }
     }
