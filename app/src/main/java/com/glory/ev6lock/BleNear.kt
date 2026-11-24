@@ -33,6 +33,8 @@ object BleNear {
     // ★ 실측: 같은 초에 -93 → -72로 튀어 '멀어짐 확인'과 '다가옴'이 동시에 발생. 1회 값 대신 최근 값들의 중간값으로 판단
     private val samples = java.util.ArrayDeque<Pair<Long, Int>>()
     @Volatile var lastHeardAt = 0L
+    /** 멀어진 뒤 가장 약했던 신호(중간값). 0=모름. 이보다 충분히 강해져야 '다가옴' */
+    @Volatile var farMin = 0
     @Synchronized private fun addSample(rssi: Int) {
         val now = System.currentTimeMillis()
         samples.addLast(now to rssi); lastHeardAt = now
@@ -233,15 +235,22 @@ class BleNearReceiver : BroadcastReceiver() {
         // ★ 실측 버그: 잠근 직후 감시를 새로 켜면 '마지막으로 본 시각'이 오래전이라 바로 '멀어짐' → 2초 뒤 열림.
         //   → 감시 시작 이후의 공백만 '멀리 갔음'으로 인정
         val prevSeen = maxOf(p.lastSeenAt, p.scanStartAt)
-        val farRssi = BleNear.rssiAt(25.0, p.bleRef1m)
+        // ★ 실측(11-24 17:34): '멀어짐 확인'(25m)이 '열기 거리'(30m)보다 가까워서, 하차 후 걸어서 멀어지는 중인데
+        //   같은 초에 '멀어짐 확인' 직후 '다가옴'으로 판정돼 열려버림 → 멀어짐 기준은 열기 기준보다 6dB 더 약해야 인정
+        val farRssi = minOf(BleNear.rssiAt(25.0, p.bleRef1m), p.bleRssi - 6)
         if (!p.farSinceLeave && (now - prevSeen > 60_000 || sm < farRssi)) {
             p.farSinceLeave = true
+            BleNear.farMin = sm
             p.log("차에서 충분히 멀어짐 확인 (${BleNear.dist(p, sm)}) → 다가오면 열기 준비")
         }
+        if (p.farSinceLeave) { if (BleNear.farMin == 0 || sm < BleNear.farMin) BleNear.farMin = sm } else BleNear.farMin = 0
         if (now - p.lastSeenAt > 5_000) p.lastSeenAt = now   // 기록은 5초에 한 번만
         if (sm < p.bleRssi) return   // 아직 멀다
         // ★ 최소 2번 인식: 설정 거리 안 신호가 최근 8초에 2번 이상 잡혀야 '다가옴'
         if (BleNear.countAtLeast(p.bleRssi, 8_000) < 2) return
+        // ★ '다가오는 중'이어야 함: 멀어진 뒤 가장 약했던 때보다 5dB 이상 강해져야 (멀어지는 중·제자리 흔들림은 무시)
+        val rise = if (BleNear.farMin == 0) 99 else sm - BleNear.farMin
+        if (rise < 5) return
         // ★ 실측: 주행 중 차 신호가 세게 잡혀 '다가옴'으로 열기 실행 → 차 안이면 무시
         if (p.inCar) return
         if (p.braked) return
@@ -281,7 +290,7 @@ class BleNearReceiver : BroadcastReceiver() {
         }
 
         // ① 첫 감지: 설정 거리 안으로 걸어서 다가옴 → 열기 시작
-        p.log("차 신호 감지 (${BleNear.dist(p, sm)}) · 걷는 중 → 차에 다가옴, 열기 시작")
+        p.log("차 신호 감지 (${BleNear.dist(p, sm)}${if (rise < 99) ", 멀어진 뒤 최저 대비 +${rise}dB" else ""}) · 걷는 중 → 차에 다가옴, 열기 시작")
         if (p.noteAutoAndCheckBrake()) {
             p.log("⚠ 30분 안에 자동 동작이 너무 많음 → 30분간 자동 잠금·열기 멈춤 (오작동 방지)")
             Notifier.info(ctx, "자동 잠금·열기가 반복돼서 30분간 멈췄어요")

@@ -98,6 +98,18 @@ object Notifier {
             .build()
     )
 
+    /** 자동 잠금이 끝내 실패: 차 문이 열려 있을 수 있음 → 팝업으로 알리고 '지금 잠금' 버튼 */
+    fun lockFailed(ctx: Context) = nm(ctx).notify(
+        9, Notification.Builder(ctx, CH)
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setContentTitle("⚠ 자동 잠금에 실패했어요")
+            .setContentText("차 문이 열려 있을 수 있어요. 눌러서 확인하세요")
+            .setStyle(Notification.BigTextStyle().bigText("기아 앱에서 잠금 버튼을 못 찾았어요. 차 문이 열려 있을 수 있으니 확인하거나 '지금 잠금'을 눌러 주세요."))
+            .setContentIntent(openApp(ctx)).setAutoCancel(true)
+            .addAction(Notification.Action.Builder(null, "지금 잠금", action(ctx, "LOCK", 10)).build())
+            .build()
+    )
+
     /** 접근성이 꺼졌거나(또는 켜져 있는데 기기가 멈춰 둠) 자동 동작이 안 될 때: 눌러서 접근성 설정 열기 */
     fun accProblem(ctx: Context, enabledInSettings: Boolean) {
         val pi = PendingIntent.getActivity(ctx, 45,

@@ -18,8 +18,8 @@ android {
         minSdk = 29
         targetSdk = 35
         // 릴리스 태그(v0.1.1)와 versionName을 맞춰야 앱의 업데이트 확인이 정확합니다. versionCode = major*10000 + minor*100 + patch
-        versionCode = (project.findProperty("verCode") as String?)?.toInt() ?: 109
-        versionName = (project.findProperty("verName") as String?) ?: "0.1.9"
+        versionCode = (project.findProperty("verCode") as String?)?.toInt() ?: 110
+        versionName = (project.findProperty("verName") as String?) ?: "0.1.10"
     }
     signingConfigs {
         if (rel.isNotEmpty()) create("release") {

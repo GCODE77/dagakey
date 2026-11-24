@@ -287,38 +287,21 @@ class MainActivity : ComponentActivity() {
                 inCar -> Triple("주행 중", "운전 중에는 자동 잠금·열기를 멈춰요", Blue)
                 else -> Triple("자동으로 지키는 중", "멀어지면 잠그고, 다가가면 열어요", Green)
             }
+            // ★ 세 줄(전체·열기·잠금)은 같은 부품(AutoRow)으로 — 높이·아이콘·글자 크기·스위치 위치가 모두 같음
+            val uM = remember(tick) { p.unlockMeters }
+            val lM = remember(tick) { p.lockMeters }
             Card(shape = RoundedCornerShape(26.dp), colors = CardDefaults.cardColors(containerColor = Card1)) {
-                Column(Modifier.fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            Modifier.size(52.dp).clip(CircleShape).background(heroColor.copy(alpha = 0.16f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Image(
-                                painterResource(if (inCar) R.drawable.ic_btn_trunk else if (allReady) R.drawable.ic_btn_lock else R.drawable.ic_btn_unlock),
-                                contentDescription = null, modifier = Modifier.size(28.dp)
-                            )
-                        }
-                        Spacer(Modifier.width(14.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(heroTitle, fontSize = 21.sp, fontWeight = FontWeight.Bold, color = Txt)
-                            Text(heroSub, fontSize = 13.sp, color = Sub)
-                        }
-                        // 전체 켜기/끄기
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            OnOffSwitch(master, {
-                                master = it; p.masterOn = it
-                                if (it) p.brakeUntil = 0
-                                p.log(if (it) "다가키 자동 켜짐" else "다가키 자동 꺼짐 (수동 버튼·위젯만 동작)")
-                                applyAuto(); tick++
-                            })
-                            Text(if (master) "자동 켜짐" else "자동 꺼짐", fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                                color = if (master) Green else Sub)
-                        }
+                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AutoRow(
+                        if (inCar) R.drawable.ic_btn_trunk else if (allReady && master) R.drawable.ic_btn_lock else R.drawable.ic_btn_unlock,
+                        heroColor.copy(alpha = 0.22f), heroTitle, heroSub, master, true,
+                        subColor = if (master && heroColor == Green) Green else heroColor
+                    ) {
+                        master = it; p.masterOn = it
+                        if (it) p.brakeUntil = 0
+                        p.log(if (it) "다가키 자동 켜짐" else "다가키 자동 꺼짐 (수동 버튼·위젯만 동작)")
+                        applyAuto(); tick++
                     }
-                    // 따로 켜고 끄기: 줄을 누르거나 오른쪽 스위치
-                    val uM = remember(tick) { p.unlockMeters }
-                    val lM = remember(tick) { p.lockMeters }
                     AutoRow(R.drawable.ic_btn_unlock, Blue.copy(alpha = 0.25f), "다가가면 열기",
                         if (approachOn) "약 ${uM}m 안으로 걸어오면 자동으로 열어요" else "다가가도 자동으로 열지 않아요",
                         approachOn, master) {
@@ -331,10 +314,8 @@ class MainActivity : ComponentActivity() {
                         autoLockOn = it; p.autoLock = it
                         p.log("멀어지면 잠금 ${if (it) "켬" else "끔"}"); applyAuto()
                     }
-                    if (inCar) Text("주행 중 — 자동 동작을 멈춰요", fontSize = 12.sp, color = Blue)
                 }
             }
-
             // ── 빠른 제어: 3개 타일 ──
             // 방금 누른 버튼: 파란색으로 표시 + 위에 '✓ ○○ 요청함 · 시:분' (위젯과 동일한 방식)
             // tick(3초마다)으로 저장값을 다시 읽어 표시 갱신
@@ -515,9 +496,11 @@ class MainActivity : ComponentActivity() {
             colors = ButtonDefaults.buttonColors(containerColor = bg, contentColor = fg)
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Image(painterResource(icon), contentDescription = label, modifier = Modifier.size(38.dp))
+                Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                    Image(painterResource(icon), contentDescription = label, modifier = Modifier.size(38.dp))
+                }
                 Spacer(Modifier.height(4.dp))
-                Text(label, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(label, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1)
             }
         }
     }
@@ -562,28 +545,31 @@ class MainActivity : ComponentActivity() {
             disabledUncheckedBorderColor = Sub.copy(alpha = 0.4f)))
     }
 
-    /** 자동 기능 한 줄: [아이콘] 제목 / 설명 …… [스위치 + 켜짐·꺼짐] — 줄 전체를 눌러도 전환 */
+    /** 자동 기능 한 줄 (전체·열기·잠금 공통): [아이콘 44] 제목 16sp / 설명 12sp(최대 2줄) …… [스위치 + 켜짐·꺼짐] — 높이 88dp 고정 */
     @Composable
-    private fun AutoRow(icon: Int, iconBg: Color, title: String, sub: String, on: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    private fun AutoRow(icon: Int, iconBg: Color, title: String, sub: String, on: Boolean, enabled: Boolean,
+                        subColor: Color? = null, onChange: (Boolean) -> Unit) {
         val active = on && enabled
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Card2)
-            .clickable(enabled = enabled) { onChange(!on) }.padding(horizontal = 14.dp, vertical = 12.dp),
+        Row(Modifier.fillMaxWidth().height(88.dp).clip(RoundedCornerShape(16.dp)).background(Card2)
+            .clickable(enabled = enabled) { onChange(!on) }.padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(42.dp).clip(CircleShape).background(iconBg), contentAlignment = Alignment.Center) {
-                Image(painterResource(icon), null, Modifier.size(22.dp), alpha = if (active) 1f else 0.4f)
+            Box(Modifier.size(44.dp).clip(CircleShape).background(iconBg), contentAlignment = Alignment.Center) {
+                Image(painterResource(icon), null, Modifier.size(24.dp), alpha = if (active) 1f else 0.4f)
             }
             Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = if (enabled) Txt else Sub)
-                Text(sub, fontSize = 12.sp, color = if (active) Green else Sub)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+                Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = if (enabled) Txt else Sub, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(2.dp))
+                Text(sub, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    color = subColor ?: if (active) Green else Sub)
             }
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.width(64.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 OnOffSwitch(on, onChange, enabled)
                 Text(if (on) "켜짐" else "꺼짐", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (active) Green else Sub)
             }
         }
     }
-
     // 설정 화면: 목록(한 화면) → 항목을 누르면 그 항목만 전체 화면으로
     private var settingsPage by mutableStateOf<String?>(null)
 

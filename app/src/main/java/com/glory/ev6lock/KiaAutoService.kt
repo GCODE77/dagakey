@@ -44,6 +44,7 @@ class KiaAutoService : AccessibilityService() {
         fun request(action: String, pin: String) {
             this.pin = pin
             if (action == "unlock") instance?.stopLeaveWatch()
+            instance?.ctrlRetry = 0
             pendingAction = action
             instance?.kick()
         }
@@ -122,7 +123,7 @@ class KiaAutoService : AccessibilityService() {
         if (isControl()) ensureTicker()
     }
 
-    private fun done() { pendingAction = ""; dkOnly = false; relaunch = 0; actionStart = 0L; ticking = false; waitingUnlock = false; pressed = false; launchedAt = 0L; homeTries = 0; remoteSent = false; backDone = false; deferred = false; diagDone = false; dkTaps = 0; dkTapAt = 0L }
+    private fun done() { pendingAction = ""; dkOnly = false; relaunch = 0; ctrlRetry = 0; actionStart = 0L; ticking = false; waitingUnlock = false; pressed = false; launchedAt = 0L; homeTries = 0; remoteSent = false; backDone = false; deferred = false; diagDone = false; dkTaps = 0; dkTapAt = 0L }
 
     @Suppress("DEPRECATION")
     private fun wakeScreen() {
@@ -164,6 +165,7 @@ class KiaAutoService : AccessibilityService() {
     private var launchedAt = 0L
     private var homeTries = 0
     private var relaunch = 0
+    private var ctrlRetry = 0
 
     private fun launchKia() {
         p.log("기아 앱 실행 → ${actionName()}")
@@ -315,7 +317,25 @@ class KiaAutoService : AccessibilityService() {
         if (actionStart == 0L) actionStart = System.currentTimeMillis()
         val elapsed = System.currentTimeMillis() - actionStart
         // 원격을 먼저 보낸 열기는 걸어오는 시간을 고려해 오래 기다림
-        if (elapsed > (if (remoteSent) 100_000 else if (dkOnly) 70_000 else 40_000)) { p.log("시간 초과 — ${actionName()} 끝 (버튼을 못 찾음)"); done(); return }
+        if (elapsed > (if (remoteSent) 100_000 else if (dkOnly) 70_000 else 40_000)) {
+            // ★ 실측(11-24 17:36): 잠금이 '버튼을 못 찾음'으로 조용히 끝나 차가 열린 채 남음
+            //   → 그때 화면 글자를 기록(원인 분석), 기아 앱을 새로 띄워 2번까지 다시 시도, 끝내 실패하면 알림
+            val vis = collectVisibleText(root).distinct().take(25).joinToString(" | ")
+            p.log("시간 초과 — ${actionName()} (버튼을 못 찾음) · 화면: $vis")
+            val act = pendingAction
+            if (ctrlRetry < 2) {
+                ctrlRetry++
+                p.log("${actionName()} 다시 시도 ($ctrlRetry/2) — 기아 앱을 새로 띄움")
+                val keepDk = dkOnly
+                kick()
+                dkOnly = keepDk
+                return
+            }
+            done()
+            if (act == "lock") { p.log("⚠ 잠금 실패 — 알림으로 알림"); Notifier.lockFailed(applicationContext) }
+            else if (act == "unlock") Notifier.info(applicationContext, "열기에 실패했어요 — 직접 확인해 주세요")
+            return
+        }
 
         val wantLock = pendingAction == "lock"
         val norm = allText.map { it.replace(" ", "") }
