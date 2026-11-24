@@ -91,7 +91,28 @@ class KiaAutoService : AccessibilityService() {
     }
 
     private fun learnFile(line: String) {
-        try { java.io.File(filesDir, "learn.txt").appendText(line + "\n") } catch (_: Exception) {}
+        for (dir in listOfNotNull(filesDir, try { getExternalFilesDir(null) } catch (_: Exception) { null })) {
+            try { java.io.File(dir, "learn.txt").appendText(line + "\n") } catch (_: Exception) {}
+        }
+    }
+
+    /** 화면의 모든 요소(글자·그림 설명·상태·눌림·위치)를 한 줄씩 — 문 잠김 같은 '그림'이 어떤 이름표를 갖는지 확인용 */
+    private fun dumpNodes(n: AccessibilityNodeInfo?, depth: Int, out: MutableList<String>) {
+        if (n == null || out.size >= 260) return
+        val r = android.graphics.Rect(); n.getBoundsInScreen(r)
+        val txt = n.text?.toString()?.take(30)
+        val d = n.contentDescription?.toString()?.take(40)
+        val id = n.viewIdResourceName?.substringAfterLast('/')
+        val st = if (android.os.Build.VERSION.SDK_INT >= 30) n.stateDescription?.toString() else null
+        val flags = buildString {
+            if (n.isClickable) append('C'); if (n.isChecked) append('K'); if (n.isSelected) append('S')
+            if (!n.isEnabled) append('D'); if (n.isVisibleToUser) append('V')
+        }
+        val cls = n.className?.toString()?.substringAfterLast('.') ?: "?"
+        // 이름표가 있거나 눌리는 것, 그림(Image*)은 이름표가 없어도 기록
+        if (txt != null || d != null || id != null || st != null || n.isClickable || cls.contains("Image"))
+            out.add("${"  ".repeat(minOf(depth, 8))}$cls t=$txt d=$d id=$id st=$st f=$flags [${r.left},${r.top},${r.right},${r.bottom}]")
+        for (i in 0 until n.childCount) dumpNodes(n.getChild(i), depth + 1, out)
     }
 
     override fun onServiceConnected() {
@@ -167,6 +188,7 @@ class KiaAutoService : AccessibilityService() {
     private var relaunch = 0
     private var ctrlRetry = 0
     private var hintCount = 0
+    private var learnDumps = 0
     private var lastHint = ""
 
     private fun launchKia() {
@@ -302,7 +324,7 @@ class KiaAutoService : AccessibilityService() {
 
     private fun learn(root: AccessibilityNodeInfo, allText: List<String>) {
         if (learnStart == 0L) {
-            learnStart = System.currentTimeMillis(); lastSig = ""
+            learnStart = System.currentTimeMillis(); lastSig = ""; learnDumps = 0
             learnFile("================ 학습 시작 ${java.util.Date()} ================")
             p.log("학습 중… 기아 앱에서 차량 화면까지 이동하세요 (90초간 기록)")
             h.postDelayed({
@@ -314,9 +336,12 @@ class KiaAutoService : AccessibilityService() {
             }, 90_000)
         }
         val texts = allText.distinct()
-        val sig = texts.take(10).joinToString("¶")
-        if (sig != lastSig) {
-            lastSig = sig
+        val nodes = mutableListOf<String>(); dumpNodes(root, 0, nodes)
+        val sig = texts.take(10).joinToString("¶") + "#" + nodes.joinToString("").hashCode()
+        if (sig != lastSig && learnDumps < 25) {
+            lastSig = sig; learnDumps++
+            learnFile("[구조 ${nodes.size}개]"); nodes.forEach { learnFile(it) }
+            p.log("[학습] 화면 구조 ${nodes.size}개 기록 (${learnDumps}/25)")
             learnFile("\n--- 화면 ---")
             learnFile("[글자] " + texts.take(80).joinToString(" | "))
             p.log("[학습] 화면 글자: " + texts.take(40).joinToString(" | "))   // 앱 기록에도 남겨 USB로 바로 읽을 수 있게
