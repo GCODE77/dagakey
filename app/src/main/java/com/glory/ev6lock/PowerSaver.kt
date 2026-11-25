@@ -197,11 +197,15 @@ object PowerSaver {
         currentSsid = ""
         val p = Prefs(app)
         closeCurrent(p, System.currentTimeMillis()); p.wifiCur = ""; p.wifiSince = 0
-        if (p.atHome) {
-            p.atHome = false
-            p.bleActive = true; p.lastMoveAt = System.currentTimeMillis()   // 집을 나서는 중 → 바로 빠른 감시
-            p.log("집 와이파이 끊김(외출) → 차 감시 다시 시작")
-            if (p.approachUnlock && !p.inCar) BleNear.start(app, quiet = true)
-        }
+        // ★ 실측: 집 안에서 공유기 사이를 오가며 1~4초 끊겼다 붙는 일이 밤새 반복 → 15초 안에 다시 붙으면 외출로 보지 않음
+        if (p.atHome) h.postDelayed({
+            val q = Prefs(app)
+            if (currentSsid.isEmpty() && q.atHome) {
+                q.atHome = false
+                q.bleActive = true; q.lastMoveAt = System.currentTimeMillis()   // 집을 나서는 중 → 바로 빠른 감시
+                q.log("집 와이파이 끊김(외출) → 차 감시 다시 시작")
+                if (q.approachUnlock && !q.inCar) BleNear.start(app, quiet = true)
+            }
+        }, 15_000)
     }
 }

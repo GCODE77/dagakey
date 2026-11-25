@@ -132,7 +132,8 @@ object BleNear {
         // 배터리 절약 ②: 걷는 중이면 빠른 감시(균형), 오래 가만히 있으면 절전 감시
         val fast = !p.motionSave || p.bleActive
         val settings = ScanSettings.Builder()
-            .setScanMode(if (fast) ScanSettings.SCAN_MODE_BALANCED else ScanSettings.SCAN_MODE_LOW_POWER)
+            // ★ 화면이 꺼지면 안드로이드가 검색을 한 단계 느리게 돌림 → 움직이는 중엔 가장 빠른 모드로 시작해서 꺼져도 균형 이상 유지
+            .setScanMode(if (!fast) ScanSettings.SCAN_MODE_LOW_POWER else if (p.motionSave) ScanSettings.SCAN_MODE_LOW_LATENCY else ScanSettings.SCAN_MODE_BALANCED)
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
             .setNumOfMatches(ScanSettings.MATCH_NUM_ONE_ADVERTISEMENT)
@@ -218,6 +219,11 @@ class BleRefreshReceiver : BroadcastReceiver() {
 }
 
 class BleNearReceiver : BroadcastReceiver() {
+    /** 차 신호가 열기 거리 안인데 열지 않은 이유를 기록 (1분에 한 번) — "왜 안 열렸지?"를 기록으로 알 수 있게 */
+    private fun skip(p: Prefs, now: Long, sm: Int, why: String) {
+        if (now - p.lastIgnoreLogAt > 60_000) { p.lastIgnoreLogAt = now; p.log("차 신호 가까움 (${BleNear.dist(p, sm)})인데 열지 않음 — $why") }
+    }
+
     override fun onReceive(ctx: Context, intent: Intent) {
         val results: List<ScanResult> =
             intent.getParcelableArrayListExtra(BluetoothLeScanner.EXTRA_LIST_SCAN_RESULT, ScanResult::class.java) ?: return
@@ -230,6 +236,10 @@ class BleNearReceiver : BroadcastReceiver() {
 
         // ★ 실측: 같은 초에 -93 → -72로 튐 → 1회 값이 아니라 최근 8초 값들의 '중간값'으로 판단
         val sm = BleNear.smooth(8_000) ?: best
+        // ★ 화면이 꺼져 있으면 안드로이드가 블루투스 검색을 느리게 돌려 신호를 늦게 받음(도착해서야 열림)
+        //   → 화면 꺼짐일 땐 열기 거리를 설정값만큼 더 늘려서 더 일찍 시작
+        val screenOff = !(ctx.getSystemService(android.os.PowerManager::class.java)?.isInteractive ?: true)
+        val th = if (screenOff) BleNear.rssiAt((p.unlockMeters + p.offBonusM).toDouble(), p.bleRef1m) else p.bleRssi
 
         // '멀리 갔었음' 판단: 감시가 켜진 상태에서 60초 넘게 신호가 안 들렸거나, 중간값이 아주 약하면(약 25m+)
         // ★ 실측 버그: 잠근 직후 감시를 새로 켜면 '마지막으로 본 시각'이 오래전이라 바로 '멀어짐' → 2초 뒤 열림.
@@ -237,7 +247,7 @@ class BleNearReceiver : BroadcastReceiver() {
         val prevSeen = maxOf(p.lastSeenAt, p.scanStartAt)
         // ★ 실측(11-24 17:34): '멀어짐 확인'(25m)이 '열기 거리'(30m)보다 가까워서, 하차 후 걸어서 멀어지는 중인데
         //   같은 초에 '멀어짐 확인' 직후 '다가옴'으로 판정돼 열려버림 → 멀어짐 기준은 열기 기준보다 6dB 더 약해야 인정
-        val farRssi = minOf(BleNear.rssiAt(25.0, p.bleRef1m), p.bleRssi - 6)
+        val farRssi = minOf(BleNear.rssiAt(25.0, p.bleRef1m), th - 6)
         if (!p.farSinceLeave && (now - prevSeen > 60_000 || sm < farRssi)) {
             p.farSinceLeave = true
             BleNear.farMin = sm
@@ -245,25 +255,30 @@ class BleNearReceiver : BroadcastReceiver() {
         }
         if (p.farSinceLeave) { if (BleNear.farMin == 0 || sm < BleNear.farMin) BleNear.farMin = sm } else BleNear.farMin = 0
         if (now - p.lastSeenAt > 5_000) p.lastSeenAt = now   // 기록은 5초에 한 번만
-        if (sm < p.bleRssi) return   // 아직 멀다
+        if (sm < th) return   // 아직 멀다
         // ★ 최소 2번 인식: 설정 거리 안 신호가 최근 8초에 2번 이상 잡혀야 '다가옴'
-        if (BleNear.countAtLeast(p.bleRssi, 8_000) < 2) return
+        //   (화면 꺼짐 중엔 신호가 드문드문 와서 12초로 넓히고, 기준보다 6dB 이상 세면 1번만 잡혀도 인정)
+        if (BleNear.countAtLeast(th, 12_000) < 2 && sm < th + 6) return
         // ★ '다가오는 중'이어야 함: 멀어진 뒤 가장 약했던 때보다 5dB 이상 강해져야 (멀어지는 중·제자리 흔들림은 무시)
         val rise = if (BleNear.farMin == 0) 99 else sm - BleNear.farMin
-        if (rise < 5) return
+        if (rise < 5) { skip(p, now, sm, "멀어진 뒤 최저보다 ${rise}dB만 강해짐 (다가오는 중 아님)"); return }
         // ★ 실측: 주행 중 차 신호가 세게 잡혀 '다가옴'으로 열기 실행 → 차 안이면 무시
         if (p.inCar) return
         if (p.braked) return
         // ★ 실측: 떠난 지 2.5분 만에 돌아왔는데 '3분 무시' 규칙 때문에 안 열림
         //   → 시간 대신 '실제로 멀리 갔다가 돌아오는지'로 판단 (내리자마자 다시 열리는 것도 방지)
-        if (!p.farSinceLeave && now - p.lastLeftAt < 15 * 60_000) return
-        val sinceUnlock = now - p.lastUnlockAt
+        if (!p.farSinceLeave && now - p.lastLeftAt < 15 * 60_000) { skip(p, now, sm, "아직 충분히 멀리 가지 않았음"); return }
+        // ★ 실측(11-25 16:45→16:50): 열고(16:45) 잠그고(16:46) 잠깐 멀리 갔다 와도 "연 지 10분 안"이라 도착 단계로만 처리돼 안 열림
+        //   → 연 뒤에 잠갔다면(lastLockAt > lastUnlockAt) 그 제한을 풀고 새로 '다가옴'으로 판단
+        val lockedAfterUnlock = p.lastLockAt > p.lastUnlockAt
+        val sinceUnlock = if (lockedAfterUnlock) Long.MAX_VALUE / 4 else now - p.lastUnlockAt
 
         // ② 도착 단계: 멀리서 먼저 연 뒤 30초 지나면 차가 스스로 다시 잠김
         //   → 차 바로 옆(약 2m)에 도착하면 한 번 더 열기 (첫 감지 후 10분 안, 1회)
         //   ★ 이때까지 디지털키로 못 열었다면(연결 안 됨 등) 원격으로도 열기
         if (sinceUnlock in 25_000..10 * 60_000) {
             val arr = BleNear.rssiAt(p.arrivalMeters.toDouble(), p.bleRef1m)
+            if (p.arrivedDone && sm >= arr) skip(p, now, sm, "도착 단계는 이미 처리함 (연 뒤 10분 안)")
             if (sm >= arr && !p.arrivedDone && BleNear.countAtLeast(arr, 6_000) >= 2) {
                 p.arrivedDone = true
                 val dkDone = p.lastDkUnlockAt >= p.lastUnlockAt   // 이번 접근에서 디지털키로 이미 열었는지

@@ -714,9 +714,15 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 Text(nowTxt, fontSize = 14.sp, color = nowColor, fontWeight = FontWeight.SemiBold)
-                Stepper("이 거리 안으로 걸어오면 열기 (약)", p.unlockMeters, "m", 2, 30, listOf(3, 5, 8, 10, 12, 15, 20, 25, 30)) {
+                Stepper("이 거리 안으로 걸어오면 열기 시작 (약)", p.unlockMeters, "m", 2, 80, listOf(10, 20, 30, 40, 50, 60, 70, 80)) {
                     p.unlockMeters = it; metersNow = it; p.log("열기 거리 저장: 약 ${it}m (세기 ${p.bleRssi} 이상)")
                 }
+                Text("이 거리에서 화면을 켜고 기아 앱을 미리 띄워요. 실제로 열리는 건 디지털키가 붙는 순간(보통 10~30m)이라, 더 멀리서 시작할수록 도착 전에 열려 있어요. " +
+                    "너무 멀게(60m↑) 하면 신호가 약해 놓치거나 엉뚱한 곳에서 시작할 수 있어요. 추천 40~50m.", fontSize = 12.sp, color = Sub)
+                Stepper("화면이 꺼져 있을 땐 더 일찍 (추가 거리)", p.offBonusM, "m", 0, 40, listOf(0, 5, 10, 15, 20, 30)) {
+                    p.offBonusM = it; p.log("설정 저장: 화면 꺼짐 추가 거리 ${it}m")
+                }
+                Text("화면이 꺼져 있으면 안드로이드가 블루투스 검색을 느리게 해서 신호를 늦게 받아요. 그만큼 미리 시작해서 도착 전에 열리게 해요.", fontSize = 12.sp, color = Sub)
                 val n = p.calSamples.split(",").count { it.isNotBlank() }
                 Text("거리 자동 보정: 기록 ${n}개 · 차 옆(1m) 세기 ${p.bleRef1m}\n" +
                     "차에 타거나 차 옆에서 열기/잠금을 누를 때마다 그때 신호로 스스로 맞춰요. 쓸수록 정확해져요.",

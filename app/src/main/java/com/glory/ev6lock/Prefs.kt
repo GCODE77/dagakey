@@ -114,6 +114,11 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("brakeCount", 4)
         set(v) = sp.edit().putInt("brakeCount", v).apply()
 
+    /** 화면이 꺼져 있을 땐 열기 거리를 이만큼(m) 더 늘려서 더 일찍 시작 (화면 꺼짐 중엔 안드로이드가 블루투스 검색을 느리게 해 신호를 늦게 받음) */
+    var offBonusM: Int
+        get() = sp.getInt("offBonusM", 10)
+        set(v) = sp.edit().putInt("offBonusM", v).apply()
+
     // ── 제어탭 문 상태 확인 (기아 앱 제어탭은 아래로 당겨야 새로고침됨) ──
     /** 제어탭에서 문 상태를 읽어 판단 (끄면 예전 방식) */
     var doorCheck: Boolean
@@ -141,7 +146,7 @@ class Prefs(ctx: Context) {
         "leaveRemote", "motionSave", "deepSave", "autoLock", "approach", "autoUnlock", "masterOn", "autoUpdate", "homeSsid",
         "widgetOrder", "bleAddr", "bleRef", "calSamples", "carBt", "carBtName", "idleMin", "deepMin", "suggestMin", "arrivalM",
         "walkSteps", "leaveWatchMin", "brakeCount", "relock", "autoRelock", "doorCheck", "doorStableSec", "refreshWaitSec",
-        "verifyRefreshSec", "verifyTimeoutSec")
+        "verifyRefreshSec", "verifyTimeoutSec", "offBonusM")
 
     fun exportCode(): String {
         val sb = StringBuilder()
