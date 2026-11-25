@@ -303,7 +303,7 @@ class MainActivity : ComponentActivity() {
                         applyAuto(); tick++
                     }
                     AutoRow(R.drawable.ic_btn_unlock, Blue.copy(alpha = 0.25f), "다가가면 열기",
-                        if (approachOn) "약 ${uM}m 안으로 걸어오면 자동으로 열어요" else "다가가도 자동으로 열지 않아요",
+                        if (approachOn) "약 ${uM}m${if (p.offBonusM > 0) "(화면 꺼지면 ${uM + p.offBonusM}m)" else ""} 안으로 오면 자동으로 열어요" else "다가가도 자동으로 열지 않아요",
                         approachOn, master) {
                         approachOn = it; p.approachUnlock = it
                         p.log("다가가면 열기 ${if (it) "켬" else "끔"}"); applyAuto()
@@ -745,15 +745,16 @@ class MainActivity : ComponentActivity() {
                     OnOffSwitch(remoteOn, { remoteOn = it; p.approachRemote = it; p.log("멀리서 원격 열기 ${if (it) "허용" else "끔"}") })
                 }
                 var arrRemote by remember { mutableStateOf(p.arrivalRemote) }
+                var arrM by remember { mutableStateOf(p.arrivalMeters) }   // '차 바로 옆' 거리 — 아래 숫자 설정을 바꾸면 이 제목도 같이 바뀜
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("차 바로 옆(약 2m)에서 안 열렸으면 원격으로도", fontSize = 14.sp, color = Txt)
+                        Text("차 바로 옆(약 ${arrM}m)에서 안 열렸으면 원격으로도", fontSize = 14.sp, color = Txt)
                         Text("켬(권장): 다가오다가 차 바로 옆에 왔는데 디지털키로 아직 못 열었으면, 그때 원격으로도 한 번 열어요", fontSize = 12.sp, color = Sub)
                     }
                     OnOffSwitch(arrRemote, { arrRemote = it; p.arrivalRemote = it; p.log("도착 시 원격 보조 ${if (it) "켬" else "끔"}") })
                 }
                 Stepper("'차 바로 옆'으로 보는 거리 (약)", p.arrivalMeters, "m", 1, 10, listOf(1, 2, 3, 4, 5, 8)) {
-                    p.arrivalMeters = it; p.log("설정 저장: 차 바로 옆 거리 약 ${it}m")
+                    p.arrivalMeters = it; arrM = it; p.log("설정 저장: 차 바로 옆 거리 약 ${it}m")
                 }
                 Stepper("'걷는 중'으로 보는 걸음 (최근 30초)", p.walkSteps, "걸음", 3, 40, listOf(3, 5, 8, 10, 15, 20)) {
                     p.walkSteps = it; p.log("설정 저장: 걷는 중 판단 30초에 ${it}걸음")
