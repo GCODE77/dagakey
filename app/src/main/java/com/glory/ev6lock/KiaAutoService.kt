@@ -144,7 +144,7 @@ class KiaAutoService : AccessibilityService() {
         if (isControl()) ensureTicker()
     }
 
-    private fun done() { pendingAction = ""; dkOnly = false; relaunch = 0; ctrlRetry = 0; hintCount = 0; lastHint = ""; verifyStart = 0L; doorSeen = null; refreshedAt = 0L; verifyRefreshed = false; actionStart = 0L; ticking = false; waitingUnlock = false; pressed = false; launchedAt = 0L; homeTries = 0; remoteSent = false; backDone = false; deferred = false; diagDone = false; dkTaps = 0; dkTapAt = 0L }
+    private fun done() { pendingAction = ""; dkOnly = false; relaunch = 0; ctrlRetry = 0; busyCount = 0; busyUntil = 0L; hintCount = 0; lastHint = ""; verifyStart = 0L; doorSeen = null; refreshedAt = 0L; verifyRefreshed = false; actionStart = 0L; ticking = false; waitingUnlock = false; pressed = false; launchedAt = 0L; homeTries = 0; remoteSent = false; backDone = false; deferred = false; diagDone = false; dkTaps = 0; dkTapAt = 0L }
 
     @Suppress("DEPRECATION")
     private fun wakeScreen() {
@@ -187,6 +187,9 @@ class KiaAutoService : AccessibilityService() {
     private var homeTries = 0
     private var relaunch = 0
     private var ctrlRetry = 0
+    private var busyCount = 0          // 기아 '이전 원격 요청이 아직 처리 중' 창을 만난 횟수
+    private var busyUntil = 0L         // 이 시각까지 기다렸다가 다시 시도
+    private var busyHandledAt = 0L
     private var hintCount = 0
     private var learnDumps = 0
     // ── 문 상태 읽기(제어탭) ──
@@ -344,9 +347,11 @@ class KiaAutoService : AccessibilityService() {
                 if (waited in 5_000..6_500) diagnoseScreen()
                 // ★ 실측: 화면이 켜져 있는데 기아 앱이 안 뜨고 30초 뒤 포기(주머니 대기)로 넘어감
                 //   → 10초 지나도 안 보이면 두 번까지 다시 실행해 봄
-                if (waited >= 10_000 && relaunch < 2 && pendingAction != "trunk") {
+                if (waited >= 10_000 && relaunch < 4 && pendingAction != "trunk") {
                     relaunch++
-                    p.log("기아 앱이 안 떠서 다시 실행 ($relaunch/2)")
+                    p.log("기아 앱이 안 떠서 다시 실행 ($relaunch/4) — 화면도 다시 켬")
+                    wakeScreen()   // ★ 실측(11-25 19:00): 주머니 속에서 화면이 다시 꺼져 기아 앱이 사라짐 → 다시 실행할 때마다 화면 켜기도 다시
+                    launchedAt = System.currentTimeMillis()   // ★ 실측(11-25 20:25:39): 같은 초에 (1/2)(2/2)가 연달아 올라감 → 바로 기준 시각 갱신
                     try { startActivity(Intent(this, WakeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                     catch (_: Exception) { launchKia() }
                     return
@@ -372,6 +377,12 @@ class KiaAutoService : AccessibilityService() {
             if (hint.isNotEmpty() && hint != lastHint) { lastHint = hint; hintCount++; p.log("기아 화면 문·잠금 글자: $hint") }
         }
 
+        // ★ 실측(11-25 19:35 잠금 실패, 20:12 열기 실패): 기아 앱이 "이전에 요청한 원격 서비스가 완료되지 않았습니다. 잠시 후 다시 실행해 주세요." 창을 띄움
+        //   → 예전엔 이 창을 못 닫고 재시도만 반복했음. 이제: 창을 닫고, 잠시 기다렸다가 다시 (최대 5번)
+        if (isControl() && allText.any { it.replace(" ", "").contains("이전에요청한원격서비스가완료되지") }) {
+            handleBusyDialog(root, allText); return
+        }
+
         if (pendingAction != "learn" && allText.any { it.contains("USB") && it.contains("디버깅") }) {
             p.log("기아 앱이 USB 디버깅 차단 화면을 띄움 → USB 디버깅을 끄세요"); done(); return
         }
@@ -381,6 +392,26 @@ class KiaAutoService : AccessibilityService() {
             "lock", "unlock" -> { ensureTicker(); doControl(root, allText) }
             "trunk" -> { ensureTicker(); doTrunk(root, allText) }
         }
+    }
+
+    /** 기아 앱의 '이전 원격 요청이 아직 처리 중' 창: 닫고 기다렸다가 다시. 5번 넘으면 실패 처리 */
+    private fun handleBusyDialog(root: AccessibilityNodeInfo, allText: List<String>) {
+        val now = System.currentTimeMillis()
+        if (now - busyHandledAt < 3_000) return          // 방금 닫는 중
+        busyHandledAt = now
+        busyCount++
+        val act = pendingAction
+        if (busyCount > 5) { p.log("기아 원격 요청이 계속 처리 중 — ${actionName()} 포기"); failFinal(act); return }
+        val waitMs = if (busyCount == 1) 8_000L else 12_000L
+        p.log("기아: 이전 원격 요청이 아직 처리 중 → 창 닫고 ${waitMs / 1000}초 뒤 다시 ($busyCount/5)")
+        // 창 안의 '닫기'만 누름: 화면에 글자가 거의 없을 때만(제어탭의 '창문 닫기' 타일과 헷갈리지 않게)
+        val vis = collectVisibleText(root).distinct()
+        if (vis.size <= 6) findExact(root, setOf("닫기"), visibleOnly = true)?.let { clickOrTap(it) }
+        busyUntil = now + waitMs
+        // ★ 실측(11-25 21:18): 기아 앱이 시작하자마자 이 창을 띄움(앱 쪽에 끝나지 않은 원격 요청이 남은 상태) → 열기는 이후 원격을 더 보내지 말고 디지털키만 기다림
+        if (act == "unlock" && !dkOnly) { dkOnly = true; p.log("열기는 이후 원격을 보내지 않고 디지털키만 사용") }
+        actionStart = if (actionStart == 0L) 0L else actionStart + waitMs   // 기다린 시간만큼 전체 제한 시간도 늘림
+        pressed = false; verifyStart = 0L
     }
 
     private fun learn(root: AccessibilityNodeInfo, allText: List<String>) {
@@ -414,6 +445,7 @@ class KiaAutoService : AccessibilityService() {
         if (pressed) return   // 이미 한 번 눌렀음 — 연타 방지 (완료 처리 대기)
         if (actionStart == 0L) actionStart = System.currentTimeMillis()
         val elapsed = System.currentTimeMillis() - actionStart
+        if (System.currentTimeMillis() < busyUntil) return   // 기아 '이전 요청 처리 중' 창을 닫은 뒤 잠시 기다리는 중
         // ── 제어탭 버튼을 누른 뒤: 문 상태가 실제로 바뀌는지 확인 (최대 15초, 안 바뀌면 다시 누름 2번까지) ──
         if (verifyStart > 0L) {
             val st = readDoorTile(root)?.first
@@ -485,7 +517,9 @@ class KiaAutoService : AccessibilityService() {
             val trusted = nowMs - doorSeenAt >= p.doorStableSec * 1000L && nowMs - refreshedAt >= p.refreshWaitSec * 1000L
             if (wantLock && st == DoorState.LOCKED) { if (trusted) finishAlready("잠겨 있음"); return }
             if (!wantLock && st == DoorState.UNLOCKED) { if (trusted) finishAlready("열려 있음"); return }
-            if (wantLock && !dkOnly) {   // 열려 있고 잠가야 함 + 원격 허용 → 제어탭 버튼을 바로 누르고 상태 확인
+            //   ★ 실측(11-25 19:35): 제어탭 원격 버튼을 먼저 눌렀다가 "이전 원격 요청 처리 중" 창에 막혀 잠금 실패 (그때 디지털키는 아직 연결돼 있었음)
+            //   → 홈 탭의 디지털키 버튼을 먼저 쓰고, 25초 안에 안 되면 그때 제어탭 원격 버튼을 마지막 수단으로
+            if (wantLock && !dkOnly && elapsed > 25_000) {   // 열려 있고 잠가야 함 + 원격 허용 → (홈 방법이 안 될 때) 제어탭 버튼을 누르고 상태 확인
                 if (clickOrTap(btn)) { verifyStart = System.currentTimeMillis(); verifyRefreshed = false; p.log("잠금 버튼 누름 (제어탭, 원격) — 상태 확인 중") }
                 return
             }
@@ -735,6 +769,14 @@ class KiaAutoService : AccessibilityService() {
         h.postDelayed(loop, 3000)
     }
     fun stopLeaveWatch() { leaveWatching = false }
+
+    /** ★ 실측(11-25 20:27 탑승 → 20:29 대기 중이던 '열기'가 되살아나 주행 중 실행됨) → 탑승하면 대기 중이던 자동 잠금/열기는 취소 */
+    fun cancelPending(why: String) {
+        if (pendingAction == "lock" || pendingAction == "unlock") {
+            p.log("${why} → 대기 중이던 ${actionName()} 취소")
+            h.removeCallbacks(controlTick); done()
+        }
+    }
 
     /** 테스트: 이미 기준 걸음만큼 걸은 것처럼 만들어 '멀어지면 바로 잠금' 동작 확인 */
     fun testLeaveWatch() {

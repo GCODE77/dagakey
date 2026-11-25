@@ -29,8 +29,12 @@ class LockWorker(ctx: Context, ps: WorkerParameters) : CoroutineWorker(ctx, ps) 
             // ★ 실측: 걸음 센서가 응답을 못 주면(null) '걸어서 떠남'으로 오판해 잠갔음 → 0걸음으로 취급
             val walked = if (now != null) now - p.stepsAtPark else 0f
             val elapsedMin = (System.currentTimeMillis() - p.parkedAt) / 60000
-            if (walked < p.stepThreshold && elapsedMin < 60) {
-                p.log("아직 차 근처 (걸음 ${walked.toInt()}) -> 1분 뒤 재확인")
+            // ★ 실측(11-25 19:36~20:12): 두 번째 하차 때 걸음 기준점이 새로 잡혀 걸음이 5에서 안 늘고,
+            //   잠금 실패 뒤 36분 동안 1분마다 "아직 차 근처"만 반복 → 신호가 안 들리거나 약하면(=멀리 있음) 걸음과 상관없이 진행
+            BleNear.start(ctx, quiet = true, forLock = true)
+            val farNow = BleNear.farForLock(p)
+            if (walked < p.stepThreshold && elapsedMin < 60 && !farNow.first) {
+                if (elapsedMin % 5L == 0L) p.log("아직 차 근처 (걸음 ${walked.toInt()}, ${farNow.second}) -> 1분 뒤 재확인 (${elapsedMin}분째)")
                 Jobs.scheduleLock(ctx, 1)
                 return Result.success()
             }

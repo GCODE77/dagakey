@@ -87,6 +87,7 @@ class CarBtReceiver : BroadcastReceiver() {
             BleNear.calibrate(p, "탑승")   // 방금 차 문 앞에서 잡힌 세기로 거리 보정
             Jobs.cancelLock(ctx)
             KiaAutoService.instance?.stopLeaveWatch()
+            KiaAutoService.instance?.cancelPending("차 오디오 연결(탑승)")
             BleNear.stop(ctx)
             return
         }
